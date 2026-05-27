@@ -1,4 +1,4 @@
-# AnB
+# Alice and Bob
 
 A client/server secrets vault for the age of AI agents. **Alice** (the client CLI
 your agents call) keeps only ciphertext on disk and runs a redaction engine;
