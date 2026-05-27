@@ -30,7 +30,7 @@ func main() {
 	}
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus,
-		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport,
+		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
 		"init": cmdInit, "scan": cmdScan, "require-presence": cmdRequirePresence,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 	}
@@ -64,10 +64,11 @@ func usage() {
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
 	fmt.Fprintf(w, row, "list [options]", "List all stored secret key names (safe for agents)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
-	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret value (interactive, human only)")
+	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret value, or --generate one (interactive, human only)")
 	fmt.Fprintf(w, row, "get [options] <key>", "View secret metadata or value (human only)")
 	fmt.Fprintf(w, row, "rm <key>", "Remove a secret from the vault (human only)")
 	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (human only)")
+	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin (human only)")
 	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
 	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
 	fmt.Fprintf(w, row, "require-presence [options] <key>", "Toggle presence gate on an existing key (human only)")

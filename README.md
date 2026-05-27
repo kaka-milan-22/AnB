@@ -238,9 +238,10 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 
 | Command | Description |
 |---|---|
-| `alice set <key> [--desc D] [--from-env V] [--stdin] [--force] [--require-presence] [--reason R]` | Store a secret (encrypted by Bob) |
+| `alice set <key> [--desc D] [--from-env V] [--stdin] [--generate] [--style S] [-l N] [--force] [--require-presence] [--reason R]` | Store a secret (encrypted by Bob); `--generate` makes a random value instead of entering one |
 | `alice get <key> [--reveal]` | Metadata, or the value with `--reveal` |
 | `alice rm <key>` | Remove a secret |
+| `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
 | `alice import <file> [--min-length N]` | Bulk-import a `.env` file |
 | `alice init` | Initialize an empty local vault |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets |
@@ -254,6 +255,37 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice install-cert <client.crt>` | Install the signed client cert |
 
 Flags may appear before or after positional arguments.
+
+---
+
+## Generating passwords
+
+`alice gen` prints fresh random passwords (stdout must be a TTY, so it can't be
+piped or captured); `alice set <key> --generate` generates one and stores it
+**without ever printing it**. Both take `--style` and `-l`; `gen` also takes `-n`.
+
+| `--style`    | `-l` controls     | default | range |
+|--------------|-------------------|--------:|-------|
+| `apple`      | groups of 6 chars |       3 | 1–8   |
+| `full`       | total characters  |      20 | 8–100 |
+| `passphrase` | words             |       5 | 3–12  |
+| `pin`        | digits            |       6 | 4–32  |
+
+`-n` (gen only) prints that many candidates (1–10, default 1).
+
+```sh
+alice gen                            # apple style, 3 groups → Hub3vx-mzg5fc-9kqpw2
+alice gen --style full -l 32 -n 3    # three 32-char passwords with symbols
+alice gen --style passphrase -l 6    # tidy-Cobra-mellow-quartz-vivid-half-09
+alice set stripe-key --generate --style full -l 24   # generate + store, never printed
+```
+
+- **`apple`** — Apple-style hyphenated alphanumeric, guaranteed lower/upper/digit.
+- **`full`** — adds shell-safe symbols (`!#$%&*+-=?@^_~`), guaranteed all four classes.
+- **`passphrase`** — EFF large wordlist, one word capitalized + a trailing number.
+- **`pin`** — digits only.
+
+All randomness comes from `crypto/rand`.
 
 ---
 

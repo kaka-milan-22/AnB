@@ -10,6 +10,7 @@ import (
 
 	"github.com/kaka-milan-22/AnB/internal/ca"
 	"github.com/kaka-milan-22/AnB/internal/localvault"
+	"github.com/kaka-milan-22/AnB/internal/pwgen"
 	"github.com/kaka-milan-22/AnB/internal/redact"
 	"github.com/kaka-milan-22/AnB/internal/term"
 )
@@ -26,6 +27,11 @@ func cmdSet(args []string) error {
 	force := fs.Bool("force", false, "overwrite without prompt (only with --stdin)")
 	reqPresence := fs.Bool("require-presence", false, "gate decrypt behind Bob presence policy")
 	reason := fs.String("reason", "", "presence reason (with --require-presence)")
+	generate := fs.Bool("generate", false, "generate the value instead of entering it")
+	genStyle := fs.String("style", "apple", "generator style with --generate: apple | full | passphrase | pin")
+	var genLen int
+	fs.IntVar(&genLen, "l", 0, "generator size with --generate (0 = style default)")
+	fs.IntVar(&genLen, "length", 0, "alias for -l")
 	pos := parse(fs, args)
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: alice set <key> [flags]")
@@ -43,6 +49,9 @@ func cmdSet(args []string) error {
 	if *reason != "" && !*reqPresence {
 		return fmt.Errorf("--reason can only be used with --require-presence")
 	}
+	if *generate && (*fromEnv != "" || *stdin) {
+		return fmt.Errorf("--generate cannot be combined with --from-env or --stdin")
+	}
 
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -53,6 +62,16 @@ func cmdSet(args []string) error {
 
 	var value string
 	switch {
+	case *generate:
+		if already && !confirmOverwrite(key, existing) {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		gen, gerr := pwgen.Generate(pwgen.Style(*genStyle), genLen)
+		if gerr != nil {
+			return gerr
+		}
+		value = gen
 	case *fromEnv != "":
 		value = os.Getenv(*fromEnv)
 		if value == "" {
@@ -104,6 +123,9 @@ func cmdSet(args []string) error {
 	gate := ""
 	if *reqPresence {
 		gate = " (presence-gated)"
+	}
+	if *generate {
+		gate += fmt.Sprintf(" [generated: %s]", *genStyle)
 	}
 	fmt.Printf("✓ Saved %q%s\n", key, gate)
 	return nil
