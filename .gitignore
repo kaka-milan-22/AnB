@@ -1,0 +1,24 @@
+# Compiled binaries
+/alice
+/bob
+/bin/
+*.test
+*.out
+
+# Local runtime state (certs, keys, vault data) — never commit
+*.pem
+*.key
+*.crt
+*.csr
+/testdata/tmp/
+coverage.*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Tooling artifacts
+.playwright-mcp/
+*.png
+/tmp/

@@ -1,0 +1,165 @@
+// Package server is Bob's mTLS oracle: it accepts authenticated connections,
+// derives the caller's identity from the verified client certificate, checks
+// authorization per request, and performs encrypt/decrypt against the held
+// master key. The key never leaves the keystore — only ciphertext and the
+// plaintext the caller is authorized to see cross the wire.
+package server
+
+import (
+	"bufio"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net"
+	"time"
+
+	"github.com/kaka-milan-22/AnB/internal/authz"
+	"github.com/kaka-milan-22/AnB/internal/keystore"
+	"github.com/kaka-milan-22/AnB/internal/proto"
+)
+
+const connIdleTimeout = 30 * time.Second
+
+type Server struct {
+	store  *keystore.Store
+	policy *authz.Policy
+	audit  *log.Logger
+}
+
+func New(store *keystore.Store, policy *authz.Policy, audit *log.Logger) *Server {
+	return &Server{store: store, policy: policy, audit: audit}
+}
+
+// Serve accepts connections until the listener closes.
+func (s *Server) Serve(ln net.Listener) error {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+		go s.handleConn(conn)
+	}
+}
+
+func (s *Server) handleConn(conn net.Conn) {
+	defer conn.Close()
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		return
+	}
+	if err := tc.Handshake(); err != nil {
+		// Failed mTLS (missing/foreign/expired client cert) — never reached
+		// dispatch, so nothing to authorize. Drop quietly.
+		return
+	}
+	identity := peerIdentity(tc)
+	if identity == "" {
+		return
+	}
+
+	r := bufio.NewReader(conn)
+	enc := json.NewEncoder(conn) // Encode appends '\n' → newline-delimited
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(connIdleTimeout))
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var req proto.Request
+			if jErr := json.Unmarshal(line, &req); jErr != nil {
+				_ = enc.Encode(proto.Response{OK: false, Code: proto.CodeBadRequest, Error: "malformed request"})
+			} else {
+				_ = enc.Encode(s.dispatch(identity, req))
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				// timeout or read error — just close
+			}
+			return
+		}
+	}
+}
+
+func peerIdentity(tc *tls.Conn) string {
+	st := tc.ConnectionState()
+	if len(st.PeerCertificates) == 0 {
+		return ""
+	}
+	return st.PeerCertificates[0].Subject.CommonName
+}
+
+func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
+	switch req.Op {
+	case proto.OpStatus:
+		return proto.Response{
+			OK:           true,
+			Unlocked:     s.store.Unlocked(),
+			TTLRemaining: int(s.store.TTLRemaining().Seconds()),
+		}
+
+	case proto.OpEncrypt:
+		if resp, ok := s.guard(identity, []string{req.Key}, req.RequirePresence, "encrypt"); !ok {
+			return resp
+		}
+		packed, err := s.store.Encrypt([]byte(req.Plaintext))
+		if err != nil {
+			return cryptoErr(err)
+		}
+		return proto.Response{OK: true, Packed: packed}
+
+	case proto.OpDecrypt:
+		if resp, ok := s.guard(identity, []string{req.Key}, req.RequirePresence, "decrypt"); !ok {
+			return resp
+		}
+		pt, err := s.store.Decrypt(req.Packed)
+		if err != nil {
+			return cryptoErr(err)
+		}
+		return proto.Response{OK: true, Plaintext: string(pt)}
+
+	case proto.OpDecryptMany:
+		if resp, ok := s.guard(identity, req.Keys, req.RequirePresence, "decryptMany"); !ok {
+			return resp
+		}
+		out := make([]string, 0, len(req.PackedMany))
+		for _, p := range req.PackedMany {
+			pt, err := s.store.Decrypt(p)
+			if err != nil {
+				return cryptoErr(err)
+			}
+			out = append(out, string(pt))
+		}
+		return proto.Response{OK: true, PlaintextMany: out}
+
+	default:
+		return proto.Response{OK: false, Code: proto.CodeBadRequest, Error: "unknown op: " + req.Op}
+	}
+}
+
+// guard runs authorization + presence policy + audit. Returns (resp,false) when
+// the request must be denied; (zero,true) when it may proceed.
+func (s *Server) guard(identity string, keys []string, presence bool, op string) (proto.Response, bool) {
+	for _, k := range keys {
+		if !s.policy.Allowed(identity, k) {
+			s.audit.Printf("DENY  identity=%q op=%s key=%q reason=unauthorized", identity, op, k)
+			return proto.Response{OK: false, Code: proto.CodeUnauthorized, Error: "not authorized for key " + k}, false
+		}
+	}
+	if presence {
+		if !s.policy.PresenceAllowed(identity) {
+			s.audit.Printf("DENY  identity=%q op=%s keys=%v reason=presence", identity, op, keys)
+			return proto.Response{OK: false, Code: proto.CodePresenceDenied, Error: "identity not permitted to decrypt presence-gated keys"}, false
+		}
+		s.audit.Printf("PRESENCE identity=%q op=%s keys=%v", identity, op, keys)
+	}
+	s.audit.Printf("ALLOW identity=%q op=%s keys=%v", identity, op, keys)
+	return proto.Response{}, true
+}
+
+func cryptoErr(err error) proto.Response {
+	if errors.Is(err, keystore.ErrLocked) {
+		return proto.Response{OK: false, Code: proto.CodeLocked, Error: "vault is locked"}
+	}
+	return proto.Response{OK: false, Code: proto.CodeDecryptFailed, Error: "operation failed"}
+}

@@ -1,0 +1,182 @@
+// Package crypto holds AnB's symmetric primitives:
+//
+//   - AES-256-GCM sealing in the "ivHex:tagHex:ctHex" wire shape (byte-for-byte
+//     compatible with agent-vault's TS vault, so ciphertext can be migrated).
+//   - Argon2id key-wrapping of the master key under an operator passphrase
+//     (the on-disk Envelope Bob persists).
+//
+// Nothing here knows about networks, files, or the daemon lifecycle — it is the
+// auditable cryptographic core that both the keystore and tests build on.
+package crypto
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+
+	"golang.org/x/crypto/argon2"
+)
+
+const (
+	MasterKeyLen = 32 // AES-256
+	gcmNonceLen  = 12
+	gcmTagLen    = 16
+	saltLen      = 16
+)
+
+// ErrBadPassword is returned by Unwrap when GCM authentication fails — which,
+// for a key-wrap, means the supplied passphrase was wrong.
+var ErrBadPassword = errors.New("incorrect master password")
+
+// Params are the Argon2id cost parameters, persisted alongside the salt so a
+// vault wrapped on one machine can be unwrapped after a parameter bump.
+type Params struct {
+	M uint32 `json:"m"` // memory in KiB
+	T uint32 `json:"t"` // iterations
+	P uint8  `json:"p"` // parallelism
+}
+
+// DefaultParams: 64 MiB, 3 passes, 1 lane — OWASP-ish interactive defaults.
+func DefaultParams() Params { return Params{M: 64 * 1024, T: 3, P: 1} }
+
+// Envelope is the on-disk wrapped master key. iv/tag/wrapped are the
+// AES-256-GCM sealing of the master key under the Argon2id-derived KEK.
+type Envelope struct {
+	KDF     string `json:"kdf"` // "argon2id"
+	Salt    string `json:"salt"`
+	Params  Params `json:"params"`
+	IV      string `json:"iv"`
+	Tag     string `json:"tag"`
+	Wrapped string `json:"wrapped"`
+}
+
+// NewMasterKey returns 32 cryptographically random bytes.
+func NewMasterKey() ([]byte, error) {
+	k := make([]byte, MasterKeyLen)
+	if _, err := rand.Read(k); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+// DeriveKEK derives a 32-byte key-encryption-key from a passphrase.
+func DeriveKEK(password string, salt []byte, p Params) []byte {
+	return argon2.IDKey([]byte(password), salt, p.T, p.M, p.P, MasterKeyLen)
+}
+
+// Wrap seals masterKey under an Argon2id KEK derived from password.
+func Wrap(masterKey []byte, password string) (*Envelope, error) {
+	salt := make([]byte, saltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	p := DefaultParams()
+	kek := DeriveKEK(password, salt, p)
+	defer Wipe(kek)
+
+	packed, err := Seal(kek, masterKey)
+	if err != nil {
+		return nil, err
+	}
+	iv, tag, ct, _ := splitPacked(packed)
+	return &Envelope{
+		KDF:     "argon2id",
+		Salt:    base64.StdEncoding.EncodeToString(salt),
+		Params:  p,
+		IV:      iv,
+		Tag:     tag,
+		Wrapped: ct,
+	}, nil
+}
+
+// Unwrap reverses Wrap. A GCM auth failure surfaces as ErrBadPassword.
+func Unwrap(env *Envelope, password string) ([]byte, error) {
+	salt, err := base64.StdEncoding.DecodeString(env.Salt)
+	if err != nil {
+		return nil, fmt.Errorf("bad salt: %w", err)
+	}
+	p := env.Params
+	if p.M == 0 || p.T == 0 || p.P == 0 {
+		p = DefaultParams()
+	}
+	kek := DeriveKEK(password, salt, p)
+	defer Wipe(kek)
+
+	key, err := Open(kek, env.IV+":"+env.Tag+":"+env.Wrapped)
+	if err != nil {
+		return nil, ErrBadPassword
+	}
+	if len(key) != MasterKeyLen {
+		return nil, errors.New("unwrapped key has wrong length")
+	}
+	return key, nil
+}
+
+// Seal encrypts plaintext under key and returns "ivHex:tagHex:ctHex".
+func Seal(key, plaintext []byte) (string, error) {
+	gcm, err := newGCM(key)
+	if err != nil {
+		return "", err
+	}
+	iv := make([]byte, gcmNonceLen)
+	if _, err := rand.Read(iv); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nil, iv, plaintext, nil) // ct || tag
+	ct := sealed[:len(sealed)-gcmTagLen]
+	tag := sealed[len(sealed)-gcmTagLen:]
+	return hex.EncodeToString(iv) + ":" + hex.EncodeToString(tag) + ":" + hex.EncodeToString(ct), nil
+}
+
+// Open reverses Seal. Returns an error on malformed input or auth failure.
+func Open(key []byte, packed string) ([]byte, error) {
+	ivHex, tagHex, ctHex, err := splitPacked(packed)
+	if err != nil {
+		return nil, err
+	}
+	iv, err := hex.DecodeString(ivHex)
+	if err != nil {
+		return nil, err
+	}
+	tag, err := hex.DecodeString(tagHex)
+	if err != nil {
+		return nil, err
+	}
+	ct, err := hex.DecodeString(ctHex)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := newGCM(key)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, iv, append(ct, tag...), nil)
+}
+
+func newGCM(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func splitPacked(packed string) (iv, tag, ct string, err error) {
+	parts := strings.SplitN(packed, ":", 3)
+	if len(parts) != 3 {
+		return "", "", "", errors.New("malformed ciphertext (want iv:tag:ct)")
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+// Wipe zeroes a byte slice in place. Best-effort: Go strings cannot be wiped.
+func Wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
