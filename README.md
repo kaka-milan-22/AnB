@@ -121,13 +121,23 @@ bob ca init
 bob init --host bob.internal,10.0.0.5
 #   → prompts for a master password (or set $ANB_BOB_PASSWORD)
 
-# run the oracle
+# run the oracle (foreground)
 bob serve --addr :8443
 #   → prompts for the master password, then listens on mTLS
+
+# …or daemonize: prompt for the password on the TTY, then detach into the background
+bob serve -D --addr :8443
+#   → ✓ bob daemonized (pid N) → ~/.anb/bob/bob.log
+#     stop with: kill $(cat ~/.anb/bob/bob.pid)   (SIGTERM zeroizes the key)
 ```
 
+`-D` reads the master password interactively, validates it, then re-execs a
+detached child and hands it the password over a pipe — so the key material never
+lands in the environment or on disk. `--log` overrides the log path.
+
 State lives in `~/.anb/bob/` (override with `--dir` or `$ANB_BOB_DIR`):
-`ca.crt ca.key server.crt server.key envelope.json authz.json`.
+`ca.crt ca.key server.crt server.key envelope.json authz.json` (plus
+`bob.log` / `bob.pid` when run with `-D`).
 
 Hand `ca.crt` to each Alice out of band (it's the public trust anchor).
 
@@ -183,6 +193,26 @@ alice rm old-key
 
 ---
 
+## Migrating from agent-vault
+
+With Bob serving, `scripts/migrate-from-agent-vault.sh` moves your existing
+secrets across:
+
+```sh
+scripts/migrate-from-agent-vault.sh --dry-run   # show the plan, change nothing
+scripts/migrate-from-agent-vault.sh             # migrate
+```
+
+It bulk-imports ordinary keys (restores `<agent-vault:key>` placeholders into a
+temp file, runs `alice import --min-length 1`, then `rm -P`s it) and migrates
+presence-gated keys interactively so their plaintext never touches disk. Key
+names are preserved, so existing `<agent-vault:key>` placeholders keep resolving.
+It migrates only — it never uninstalls or deletes agent-vault. (A direct
+`agent-vault get --reveal | alice set --stdin` pipe can't work: both tools refuse
+when stdout isn't a TTY, which is why the script routes through a temp file.)
+
+---
+
 ## Command reference
 
 ### bob (operator)
@@ -192,7 +222,7 @@ alice rm old-key
 | `bob ca init [--cn N] [--ttl-years N] [--force]` | Create the private CA |
 | `bob init [--host h1,h2] [--force]` | Generate + wrap the master key, mint the server cert |
 | `bob sign-csr <csr> [--out F] [--ttl-days N]` | Sign an Alice CSR → client cert |
-| `bob serve [--addr :8443] [--ttl SECONDS]` | Unlock + run the mTLS oracle |
+| `bob serve [--addr :8443] [--ttl SECONDS] [-D] [--log FILE]` | Unlock + run the mTLS oracle (`-D` detaches into the background) |
 
 ### alice — safe (agent + human, no TTY)
 
