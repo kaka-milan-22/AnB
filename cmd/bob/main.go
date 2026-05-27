@@ -10,10 +10,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -56,12 +59,23 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `bob — AnB KMS daemon
-  bob ca init [--cn NAME] [--ttl-years N]
-  bob init [--host h1,h2,...]
-  bob sign-csr <csr.pem> [--out FILE] [--ttl-days N]
-  bob serve [--addr :8443] [--ttl SECONDS]
-`)
+	const row = "  %-36s%s\n" // 2-space indent + aligned command column + description
+	w := os.Stderr
+	fmt.Fprint(w, "Usage: bob [options] <command>\n\n")
+	fmt.Fprint(w, "Keep your secrets hidden from AI agents.\n")
+	fmt.Fprint(w, "https://github.com/kaka-milan-22/AnB\n\n")
+
+	fmt.Fprint(w, "Options:\n")
+	fmt.Fprintf(w, row, "-h, --help", "display help for command")
+
+	fmt.Fprint(w, "\nCommands:\n")
+	fmt.Fprintf(w, row, "ca init [options]", "Create the private CA — the trust root for everyone")
+	fmt.Fprintf(w, row, "init [options]", "Generate + wrap the master key, mint the server cert")
+	fmt.Fprintf(w, row, "sign-csr [options] <csr.pem>", "Sign an Alice CSR → client certificate")
+	fmt.Fprintf(w, row, "serve [options]", "Unlock the master key and run the mTLS oracle (-D to daemonize)")
+
+	fmt.Fprint(w, "\nCommon: --dir DIR        state dir (default ~/.anb/bob or $ANB_BOB_DIR)\n")
+	fmt.Fprint(w, "        $ANB_BOB_PASSWORD master password for init/serve (else prompted on a TTY)\n")
 	os.Exit(2)
 }
 
@@ -240,7 +254,14 @@ func cmdServe(args []string) error {
 	dir := fs.String("dir", "", "state dir")
 	addr := fs.String("addr", ":8443", "listen address")
 	ttl := fs.Int("ttl", 0, "idle seconds before auto-relock (0 = hold until exit)")
+	daemon := fs.Bool("D", false, "daemonize: read the password on the TTY, then detach into the background")
+	logPath := fs.String("log", "", "log file in daemon mode (default <dir>/bob.log)")
 	parse(fs, args)
+
+	// _ANB_DAEMON_CHILD marks the detached child re-exec'd by -D; it reads the
+	// master password from its stdin pipe (handed over by the parent) instead of
+	// prompting, since it has no controlling terminal.
+	isChild := os.Getenv("_ANB_DAEMON_CHILD") == "1"
 
 	d := bobDir(*dir)
 	for _, f := range []string{"ca.crt", "server.crt", "server.key", "envelope.json"} {
@@ -258,17 +279,40 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("envelope.json: %w", err)
 	}
 
-	// Unlock: operator password (TTY) or $ANB_BOB_PASSWORD for automation.
+	// Unlock secret: $ANB_BOB_PASSWORD (automation) > parent's stdin pipe (daemon
+	// child) > interactive TTY prompt. It never touches env (unless the operator
+	// set it) or disk.
 	password := os.Getenv("ANB_BOB_PASSWORD")
 	if password == "" {
-		if !term.StdinIsTTY() {
-			return fmt.Errorf("serve needs the master password: run on a TTY or set ANB_BOB_PASSWORD")
-		}
-		var err error
-		if password, err = term.ReadPassword("Bob master password: "); err != nil {
-			return err
+		switch {
+		case isChild:
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			password = strings.TrimRight(line, "\r\n")
+			if password == "" {
+				return fmt.Errorf("daemon: no master password received from parent")
+			}
+		case term.StdinIsTTY():
+			var err error
+			if password, err = term.ReadPassword("Bob master password: "); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("serve needs the master password: run on a TTY (optionally with -D) or set ANB_BOB_PASSWORD")
 		}
 	}
+
+	// -D in the foreground process: validate the password here (so a wrong one
+	// fails immediately, not silently in the background), then re-exec a detached
+	// child and hand it the password over a pipe.
+	if *daemon && !isChild {
+		mk, err := crypto.Unwrap(&env, password) // validate before detaching
+		if err != nil {
+			return err
+		}
+		crypto.Wipe(mk)
+		return daemonize(d, *logPath, password)
+	}
+
 	mk, err := crypto.Unwrap(&env, password)
 	if err != nil {
 		return err
@@ -316,5 +360,51 @@ func cmdServe(args []string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// daemonize re-execs bob as a detached background process (new session, stdio →
+// log file) and hands it the master password over an anonymous pipe, so the key
+// material stays off env and disk. The foreground parent prints the child PID
+// and returns; the child re-enters cmdServe and reads the password from stdin.
+func daemonize(dir, logPath, password string) error {
+	if logPath == "" {
+		logPath = filepath.Join(dir, "bob.log")
+	}
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening log %s: %w", logPath, err)
+	}
+	defer logf.Close()
+
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(exe, os.Args[1:]...) // same args (incl. -D); child opts out via the env marker
+	cmd.Env = append(os.Environ(), "_ANB_DAEMON_CHILD=1")
+	cmd.Stdin = pr
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from the controlling terminal
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
+		return err
+	}
+	pr.Close()
+	io.WriteString(pw, password+"\n")
+	pw.Close()
+
+	pid := cmd.Process.Pid
+	_ = os.WriteFile(filepath.Join(dir, "bob.pid"), []byte(fmt.Sprintf("%d\n", pid)), 0o644)
+	_ = cmd.Process.Release() // fire-and-forget; let init reap it
+	fmt.Printf("✓ bob daemonized (pid %d) → %s\n", pid, logPath)
+	fmt.Printf("  stop: kill %d   (master key zeroized on SIGTERM)\n", pid)
 	return nil
 }

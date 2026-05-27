@@ -49,14 +49,32 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `alice — AnB client
-  safe:       read <file> | write <file> [--content C] | has <keys...> | list | status
-  sensitive:  set <key> | get <key> [--reveal] | rm <key> | import <file> | init | scan <file>
-              require-presence <key> --on|--off [--reason R]
-  setup:      enroll --identity N --bob HOST:PORT --server-name SAN --ca ca.crt
-              install-cert <client.crt>
-common flag:  --dir DIR  (default ~/.anb/alice or $ANB_ALICE_DIR)
-`)
+	const row = "  %-36s%s\n" // 2-space indent + aligned command column + description
+	w := os.Stderr
+	fmt.Fprint(w, "Usage: alice [options] <command>\n\n")
+	fmt.Fprint(w, "Keep your secrets hidden from AI agents.\n")
+	fmt.Fprint(w, "https://github.com/kaka-milan-22/AnB\n\n")
+
+	fmt.Fprint(w, "Options:\n")
+	fmt.Fprintf(w, row, "-h, --help", "display help for command")
+
+	fmt.Fprint(w, "\nCommands:\n")
+	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
+	fmt.Fprintf(w, row, "write [options] <file>", "Write a file, restoring <agent-vault:key> placeholders (safe for agents)")
+	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
+	fmt.Fprintf(w, row, "list [options]", "List all stored secret key names (safe for agents)")
+	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
+	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret value (interactive, human only)")
+	fmt.Fprintf(w, row, "get [options] <key>", "View secret metadata or value (human only)")
+	fmt.Fprintf(w, row, "rm <key>", "Remove a secret from the vault (human only)")
+	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (human only)")
+	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
+	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
+	fmt.Fprintf(w, row, "require-presence [options] <key>", "Toggle presence gate on an existing key (human only)")
+	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
+	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
+
+	fmt.Fprint(w, "\nCommon: --dir DIR   state dir (default ~/.anb/alice or $ANB_ALICE_DIR)\n")
 	os.Exit(2)
 }
 
