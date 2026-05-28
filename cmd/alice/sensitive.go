@@ -30,8 +30,6 @@ func cmdSet(args []string) error {
 	fromEnv := fs.String("from-env", "", "read value from environment variable")
 	stdin := fs.Bool("stdin", false, "read value from stdin pipe")
 	force := fs.Bool("force", false, "overwrite without prompt (only with --stdin)")
-	reqPresence := fs.Bool("require-presence", false, "gate decrypt behind Bob presence policy")
-	reason := fs.String("reason", "", "presence reason (with --require-presence)")
 	generate := fs.Bool("generate", false, "generate the value instead of entering it")
 	genStyle := fs.String("style", "apple", "generator style with --generate: apple | full | passphrase | pin")
 	var genLen int
@@ -50,9 +48,6 @@ func cmdSet(args []string) error {
 	}
 	if !keyFormat.MatchString(key) {
 		return fmt.Errorf("invalid key format (use lowercase alphanumeric + hyphens, e.g. my-api-key)")
-	}
-	if *reason != "" && !*reqPresence {
-		return fmt.Errorf("--reason can only be used with --require-presence")
 	}
 	if *generate && (*fromEnv != "" || *stdin) {
 		return fmt.Errorf("--generate cannot be combined with --from-env or --stdin")
@@ -117,31 +112,20 @@ func cmdSet(args []string) error {
 		return err
 	}
 	entry := localvault.SecretEntry{Value: packed, CreatedAt: nowStamp(), Desc: *desc}
-	if *reqPresence {
-		entry.RequirePresence = true
-		entry.PresenceReason = *reason
-	}
 	v.Set(key, entry)
 	if err := s.Save(v); err != nil {
 		return err
 	}
-	gate := ""
-	if *reqPresence {
-		gate = " (presence-gated)"
-	}
+	suffix := ""
 	if *generate {
-		gate += fmt.Sprintf(" [generated: %s]", *genStyle)
+		suffix = fmt.Sprintf(" [generated: %s]", *genStyle)
 	}
-	fmt.Printf("✓ Saved %q%s\n", key, gate)
+	fmt.Printf("✓ Saved %q%s\n", key, suffix)
 	return nil
 }
 
 func confirmOverwrite(key string, e localvault.SecretEntry) bool {
-	gate := ""
-	if e.RequirePresence {
-		gate = " [presence]"
-	}
-	fmt.Fprintf(os.Stderr, "⚠ %q%s already exists (set %s)\n", key, gate, e.CreatedAt)
+	fmt.Fprintf(os.Stderr, "⚠ %q already exists (set %s)\n", key, e.CreatedAt)
 	ok, _ := term.Confirm("Overwrite?", false)
 	return ok
 }
@@ -172,7 +156,7 @@ func cmdGet(args []string) error {
 		if err != nil {
 			return err
 		}
-		pt, err := cl.Decrypt(key, e.Value, e.RequirePresence)
+		pt, err := cl.Decrypt(key, e.Value)
 		if err != nil {
 			return err
 		}
@@ -184,12 +168,6 @@ func cmdGet(args []string) error {
 		fmt.Printf("Desc:     %s\n", e.Desc)
 	}
 	fmt.Printf("Set at:   %s\n", e.CreatedAt)
-	if e.RequirePresence {
-		fmt.Println("Presence: required (Bob policy)")
-		if e.PresenceReason != "" {
-			fmt.Printf("Reason:   %s\n", e.PresenceReason)
-		}
-	}
 	return nil
 }
 
@@ -239,52 +217,6 @@ func cmdInit(args []string) error {
 		return err
 	}
 	fmt.Printf("✓ Initialized vault at %s\n", s.VaultPath())
-	return nil
-}
-
-// require-presence <key> --on|--off — toggle presence policy on a key.
-func cmdRequirePresence(args []string) error {
-	fs := newFS("require-presence")
-	dir := dirFlag(fs)
-	on := fs.Bool("on", false, "enable the gate")
-	off := fs.Bool("off", false, "disable the gate")
-	reason := fs.String("reason", "", "presence reason (with --on)")
-	pos := parse(fs, args)
-	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice require-presence <key> --on|--off")
-	}
-	requireTTY("alice require-presence")
-	if *on == *off {
-		return fmt.Errorf("specify exactly one of --on or --off")
-	}
-	if *reason != "" && *off {
-		return fmt.Errorf("--reason is only meaningful with --on")
-	}
-	key := pos[0]
-	s := localvault.Open(*dir)
-	v, err := s.Load()
-	if err != nil {
-		return err
-	}
-	e, ok := v.Get(key)
-	if !ok {
-		return fmt.Errorf("secret %q not found", key)
-	}
-	if e.RequirePresence == *on {
-		fmt.Printf("%q already %s presence; nothing to do.\n", key, ternary(*on, "requires", "does not require"))
-		return nil
-	}
-	e.RequirePresence = *on
-	if *on {
-		e.PresenceReason = *reason
-	} else {
-		e.PresenceReason = ""
-	}
-	v.Set(key, e)
-	if err := s.Save(v); err != nil {
-		return err
-	}
-	fmt.Printf("✓ %q %s\n", key, ternary(*on, "now requires presence", "no longer requires presence"))
 	return nil
 }
 
@@ -573,13 +505,6 @@ func validatePairingCode(s string) error {
 		}
 	}
 	return nil
-}
-
-func ternary(b bool, a, c string) string {
-	if b {
-		return a
-	}
-	return c
 }
 
 func hostOnly(addr string) string {

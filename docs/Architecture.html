@@ -243,7 +243,7 @@
 
           <rect x="580" y="240" width="260" height="44" rx="8" fill="#22262d" stroke="#2c313a"/>
           <text x="594" y="260">private CA · authz · audit</text>
-          <text x="594" y="276" fill="#9aa0a8" font-size="11">per-identity rules + presence policy</text>
+          <text x="594" y="276" fill="#9aa0a8" font-size="11">per-identity key-prefix rules</text>
         </g>
         <text x="580" y="328" fill="#9aa0a8" font-size="11.5" font-family="ui-monospace,monospace">master key never leaves this process</text>
 
@@ -299,7 +299,7 @@
       <div class="card feat"><h3><span class="dot" style="background:var(--blue)"></span>Mutual TLS, private CA</h3><p>Bob mints its own CA, server cert, and signs each client CSR. No public CA, no ACME. The client cert's CommonName is the caller's identity — Kubernetes-style.</p></div>
       <div class="card feat"><h3><span class="dot" style="background:var(--violet)"></span>Redaction engine</h3><p>Faithful port of agent-vault: known-value masking plus high-entropy / pattern detection of <em>unvaulted</em> secrets, with sha256-keyed write-back restore.</p></div>
       <div class="card feat"><h3><span class="dot" style="background:var(--amber)"></span>Safe / sensitive split</h3><p>Agents run safe commands without a TTY; <code>set</code> / <code>get --reveal</code> require an interactive terminal, so plaintext exfiltration is structurally blocked.</p></div>
-      <div class="card feat"><h3><span class="dot" style="background:var(--teal)"></span>Per-identity authorization</h3><p>Map each identity to allowed key prefixes, plus a presence allowlist for gated keys. Every request is authorized and audit-logged.</p></div>
+      <div class="card feat"><h3><span class="dot" style="background:var(--teal)"></span>Per-identity authorization</h3><p>Map each identity to allowed key prefixes. Every request is authorized and audit-logged.</p></div>
       <div class="card feat"><h3><span class="dot" style="background:var(--blue)"></span>Hardened key custody</h3><p>Master key wrapped with Argon2id at rest, <code>mlock</code>'d in memory, core dumps disabled, <code>PR_SET_DUMPABLE=0</code> on Linux, zeroized on idle TTL or shutdown.</p></div>
     </div>
   </section>
@@ -324,11 +324,10 @@
   <section>
     <h2><span class="num">06</span>Trust boundary — read this</h2>
     <p>mTLS protects the <b>wire</b> and authenticates both ends. It does <b>not</b> protect the endpoints. Be honest about what this design does and doesn't buy:</p>
-    <div class="grid cols-2" style="margin-top:18px">
+    <div class="grid cols-3" style="margin-top:18px">
       <div class="callout warn"><h3>Endpoints see plaintext</h3><p>It lives in Bob's memory (it decrypts) and in Alice's process (it receives results). A compromised Alice gets the plaintext it asks for — unavoidable.</p></div>
       <div class="callout warn"><h3>Client key = secret-zero</h3><p>Whoever steals Alice's client private key can impersonate her to Bob. Keep it <code>0600</code>; revoke and reissue if lost.</p></div>
       <div class="callout warn"><h3>Bob is a central SPOF</h3><p>It holds the KEK and sees all plaintext flowing through it. Harden and audit it as the crown jewel.</p></div>
-      <div class="callout"><h3>Presence = Bob policy</h3><p>Gated keys are enforced by an identity allowlist + prominent audit at Bob, not by device biometrics.</p></div>
     </div>
     <div class="callout" style="margin-top:16px">
       <h3 style="color:var(--teal)">What you do gain over a plaintext key file</h3>
@@ -347,12 +346,11 @@
         <tr><td>alice read &lt;file&gt;</td><td><span class="tag safe">safe</span></td><td>Print a file with secrets redacted</td></tr>
         <tr><td>alice write &lt;file&gt;</td><td><span class="tag safe">safe</span></td><td>Restore <code>&lt;agent-vault:…&gt;</code> placeholders</td></tr>
         <tr><td>alice has &lt;keys…&gt;</td><td><span class="tag safe">safe</span></td><td>Check existence (local metadata)</td></tr>
-        <tr><td>alice list</td><td><span class="tag safe">safe</span></td><td>List key names; gated keys marked <code>[presence]</code></td></tr>
+        <tr><td>alice list</td><td><span class="tag safe">safe</span></td><td>List all stored key names</td></tr>
         <tr><td>alice status</td><td><span class="tag safe">safe</span></td><td>Enrollment + Bob reachability / unlock state</td></tr>
         <tr><td>alice set &lt;key&gt;</td><td><span class="tag sens">sensitive</span></td><td>Store a secret (encrypted by Bob)</td></tr>
         <tr><td>alice get &lt;key&gt; --reveal</td><td><span class="tag sens">sensitive</span></td><td>Show metadata, or the value</td></tr>
         <tr><td>alice rm / import / init / scan</td><td><span class="tag sens">sensitive</span></td><td>Remove · bulk .env import · init vault · audit a file</td></tr>
-        <tr><td>alice require-presence &lt;key&gt;</td><td><span class="tag sens">sensitive</span></td><td>Toggle presence policy on a key</td></tr>
         <tr><td>bob ca init / init / serve</td><td class="muted">operator</td><td>Create CA · wrap master key + server cert · run the oracle</td></tr>
         <tr><td>bob sign-csr &lt;csr&gt;</td><td class="muted">operator</td><td>Sign an Alice CSR → client cert</td></tr>
       </tbody>

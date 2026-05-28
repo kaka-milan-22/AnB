@@ -4,7 +4,7 @@
 // safe/sensitive TTY split that structurally keeps agents out of plaintext.
 //
 //	safe (agent + human):     read  write  has  list  status
-//	sensitive (human, TTY):   set  get  rm  import  init  scan  require-presence
+//	sensitive (human, TTY):   set  get  rm  import  init  scan
 //	setup:                    enroll  install-cert
 package main
 
@@ -31,7 +31,7 @@ func main() {
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
-		"init": cmdInit, "scan": cmdScan, "require-presence": cmdRequirePresence,
+		"init": cmdInit, "scan": cmdScan,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 	}
 	fn, ok := cmds[os.Args[1]]
@@ -71,7 +71,6 @@ func usage() {
 	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin (human only)")
 	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
 	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
-	fmt.Fprintf(w, row, "require-presence [options] <key>", "Toggle presence gate on an existing key (human only)")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 
@@ -151,19 +150,15 @@ func decryptAllValues(s *localvault.Store) (map[string]string, error) {
 	}
 	keys := make([]string, 0, len(v.Secrets))
 	packed := make([]string, 0, len(v.Secrets))
-	gated := false
 	for k, e := range v.Secrets {
 		keys = append(keys, k)
 		packed = append(packed, e.Value)
-		if e.RequirePresence {
-			gated = true
-		}
 	}
 	cl, _, err := loadClient(s)
 	if err != nil {
 		return nil, err
 	}
-	pts, err := cl.DecryptMany(keys, packed, gated)
+	pts, err := cl.DecryptMany(keys, packed)
 	if err != nil {
 		return nil, err
 	}

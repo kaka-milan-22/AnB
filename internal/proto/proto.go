@@ -15,25 +15,22 @@ const (
 // Failure codes (Response.Code) — machine-readable so Alice can map them to
 // distinct UX / exit behavior.
 const (
-	CodeLocked         = "locked"          // Bob holds no key (operator hasn't unlocked)
-	CodeUnauthorized   = "unauthorized"    // identity not allowed this key
-	CodePresenceDenied = "presence-denied" // gated key, identity not on presence allowlist
-	CodeDecryptFailed  = "decrypt-failed"  // ciphertext malformed / auth failure
-	CodeBadRequest     = "bad-request"
-	CodeInternal       = "internal"
+	CodeLocked        = "locked"         // Bob holds no key (operator hasn't unlocked)
+	CodeUnauthorized  = "unauthorized"   // identity not allowed this key
+	CodeDecryptFailed = "decrypt-failed" // ciphertext malformed / auth failure
+	CodeBadRequest    = "bad-request"
+	CodeInternal      = "internal"
 )
 
 // Request is one operation. Key/Keys are the logical vault key names (NOT the
-// ciphertext), used for authorization and presence policy. RequirePresence is
-// Alice's advisory signal that the key is gated; Bob applies its own policy.
+// ciphertext), used for authorization.
 type Request struct {
-	Op              string   `json:"op"`
-	Key             string   `json:"key,omitempty"`
-	Keys            []string `json:"keys,omitempty"`
-	Plaintext       string   `json:"plaintext,omitempty"`
-	Packed          string   `json:"packed,omitempty"`
-	PackedMany      []string `json:"packedMany,omitempty"`
-	RequirePresence bool     `json:"requirePresence,omitempty"`
+	Op         string   `json:"op"`
+	Key        string   `json:"key,omitempty"`
+	Keys       []string `json:"keys,omitempty"`
+	Plaintext  string   `json:"plaintext,omitempty"`
+	Packed     string   `json:"packed,omitempty"`
+	PackedMany []string `json:"packedMany,omitempty"`
 }
 
 // Response is one result. OK gates the payload fields; on failure Code/Error

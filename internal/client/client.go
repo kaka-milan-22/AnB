@@ -18,12 +18,11 @@ import (
 )
 
 var (
-	ErrUnreachable    = errors.New("cannot reach Bob (is the daemon up / network ok?)")
-	ErrLocked         = errors.New("Bob is locked (operator has not unlocked the master key)")
-	ErrUnauthorized   = errors.New("not authorized for this key")
-	ErrPresenceDenied = errors.New("this identity may not decrypt presence-gated keys")
-	ErrDecryptFailed  = errors.New("decrypt failed (wrong vault / corrupted ciphertext)")
-	ErrProtocol       = errors.New("unexpected response from Bob")
+	ErrUnreachable   = errors.New("cannot reach Bob (is the daemon up / network ok?)")
+	ErrLocked        = errors.New("Bob is locked (operator has not unlocked the master key)")
+	ErrUnauthorized  = errors.New("not authorized for this key")
+	ErrDecryptFailed = errors.New("decrypt failed (wrong vault / corrupted ciphertext)")
+	ErrProtocol      = errors.New("unexpected response from Bob")
 )
 
 type Client struct {
@@ -72,8 +71,6 @@ func mapErr(resp proto.Response) error {
 		return ErrLocked
 	case proto.CodeUnauthorized:
 		return ErrUnauthorized
-	case proto.CodePresenceDenied:
-		return ErrPresenceDenied
 	case proto.CodeDecryptFailed:
 		return ErrDecryptFailed
 	default:
@@ -97,8 +94,8 @@ func (c *Client) Encrypt(key, plaintext string) (string, error) {
 }
 
 // Decrypt asks Bob to decrypt one ciphertext.
-func (c *Client) Decrypt(key, packed string, presence bool) (string, error) {
-	resp, err := c.call(proto.Request{Op: proto.OpDecrypt, Key: key, Packed: packed, RequirePresence: presence})
+func (c *Client) Decrypt(key, packed string) (string, error) {
+	resp, err := c.call(proto.Request{Op: proto.OpDecrypt, Key: key, Packed: packed})
 	if err != nil {
 		return "", err
 	}
@@ -110,11 +107,11 @@ func (c *Client) Decrypt(key, packed string, presence bool) (string, error) {
 
 // DecryptMany decrypts a batch in one round-trip (for `read` / `scan`). keys is
 // parallel to packed and used for per-key authorization.
-func (c *Client) DecryptMany(keys, packed []string, presence bool) ([]string, error) {
+func (c *Client) DecryptMany(keys, packed []string) ([]string, error) {
 	if len(packed) == 0 {
 		return nil, nil
 	}
-	resp, err := c.call(proto.Request{Op: proto.OpDecryptMany, Keys: keys, PackedMany: packed, RequirePresence: presence})
+	resp, err := c.call(proto.Request{Op: proto.OpDecryptMany, Keys: keys, PackedMany: packed})
 	if err != nil {
 		return nil, err
 	}

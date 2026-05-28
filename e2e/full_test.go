@@ -1,6 +1,6 @@
 // Package e2e drives the whole stack at the library level: a real Bob oracle
 // over loopback mTLS, a real Alice client, the local vault, and the redaction
-// engine — exercising set / read / write / presence / locked exactly as the
+// engine — exercising set / read / write / locked exactly as the
 // CLI does, minus the TTY plumbing. It is the authoritative correctness proof
 // of the Alice↔Bob system.
 package e2e
@@ -120,7 +120,7 @@ func TestFullFlow(t *testing.T) {
 		if !ok {
 			return "", false
 		}
-		pt, derr := cl.Decrypt(k, e.Value, e.RequirePresence)
+		pt, derr := cl.Decrypt(k, e.Value)
 		if derr != nil {
 			t.Fatalf("decrypt %s: %v", k, derr)
 		}
@@ -128,27 +128,6 @@ func TestFullFlow(t *testing.T) {
 	})
 	if len(res.Missing) != 0 || !strings.Contains(res.Content, secret) {
 		t.Fatalf("restore failed: %+v", res)
-	}
-}
-
-func TestPresenceGatedDecrypt(t *testing.T) {
-	policy := &authz.Policy{Rules: map[string][]string{"alice": {"*"}, "agent": {"*"}}}
-	policy.Presence.Allow = []string{"alice"}
-	b := startBob(t, unlockedStore(t), policy)
-
-	// alice stores a gated secret.
-	alice := b.aliceClient(t, "alice")
-	packed, _ := alice.Encrypt("gated", "top-secret")
-
-	// agent is authorized for the key but not on the presence allowlist.
-	agent := b.aliceClient(t, "agent")
-	if _, err := agent.Decrypt("gated", packed, true); err != client.ErrPresenceDenied {
-		t.Fatalf("want ErrPresenceDenied for agent, got %v", err)
-	}
-	// alice may decrypt the gated key.
-	pt, err := alice.Decrypt("gated", packed, true)
-	if err != nil || pt != "top-secret" {
-		t.Fatalf("alice gated decrypt: pt=%q err=%v", pt, err)
 	}
 }
 
@@ -165,13 +144,11 @@ func TestLockedBobRefuses(t *testing.T) {
 func decryptAll(t *testing.T, cl *client.Client, v *localvault.Vault) map[string]string {
 	t.Helper()
 	var keys, packed []string
-	gated := false
 	for k, e := range v.Secrets {
 		keys = append(keys, k)
 		packed = append(packed, e.Value)
-		gated = gated || e.RequirePresence
 	}
-	pts, err := cl.DecryptMany(keys, packed, gated)
+	pts, err := cl.DecryptMany(keys, packed)
 	if err != nil {
 		t.Fatalf("decryptMany: %v", err)
 	}
