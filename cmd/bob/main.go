@@ -98,11 +98,19 @@ func bobDir(flagDir string) string {
 	return filepath.Join(home, ".anb", "bob")
 }
 
+// writeFile writes data to dir/name atomically: tmp file + rename. Prevents a
+// SIGKILL / power loss mid-write from truncating critical files like
+// envelope.json or ca.key. mode is applied to the temp file (rename preserves).
 func writeFile(dir, name string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name), data, mode)
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func readFile(dir, name string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, name)) }
