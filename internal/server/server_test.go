@@ -147,24 +147,6 @@ func TestAuthorizationByIdentity(t *testing.T) {
 	}
 }
 
-func TestPresencePolicy(t *testing.T) {
-	policy := &authz.Policy{Rules: map[string][]string{"alice": {"*"}, "agent": {"*"}}}
-	policy.Presence.Allow = []string{"alice"}
-	h := newHarness(t, unlockedStore(t), policy)
-
-	enc := h.dial(t, "alice").call(t, proto.Request{Op: proto.OpEncrypt, Key: "k", Plaintext: "v"})
-	// agent is authorized for the key but not on the presence allowlist
-	got := h.dial(t, "agent").call(t, proto.Request{Op: proto.OpDecrypt, Key: "k", Packed: enc.Packed, RequirePresence: true})
-	if got.OK || got.Code != proto.CodePresenceDenied {
-		t.Fatalf("expected presence-denied for agent, got %+v", got)
-	}
-	// alice is on the allowlist → permitted
-	ok := h.dial(t, "alice").call(t, proto.Request{Op: proto.OpDecrypt, Key: "k", Packed: enc.Packed, RequirePresence: true})
-	if !ok.OK || ok.Plaintext != "v" {
-		t.Fatalf("expected alice presence decrypt ok, got %+v", ok)
-	}
-}
-
 func TestLockedStoreRefuses(t *testing.T) {
 	locked := keystore.New(nil) // never Hold → locked
 	h := newHarness(t, locked, allowAll())

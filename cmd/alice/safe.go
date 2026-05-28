@@ -83,14 +83,10 @@ func cmdWrite(args []string) error {
 
 	// Resolve referenced placeholders via Bob in a single batch.
 	var keys, packed []string
-	gated := false
 	for _, k := range redact.ExtractPlaceholders(content) {
 		if e, ok := v.Get(k); ok {
 			keys = append(keys, k)
 			packed = append(packed, e.Value)
-			if e.RequirePresence {
-				gated = true
-			}
 		}
 	}
 	resolved := map[string]string{}
@@ -99,7 +95,7 @@ func cmdWrite(args []string) error {
 		if err != nil {
 			return err
 		}
-		pts, err := cl.DecryptMany(keys, packed, gated)
+		pts, err := cl.DecryptMany(keys, packed)
 		if err != nil {
 			return err
 		}
@@ -186,7 +182,7 @@ func cmdHas(args []string) error {
 	return nil
 }
 
-// list — list key names; gated keys marked [presence] (local metadata).
+// list — list key names (local metadata).
 func cmdList(args []string) error {
 	fs := newFS("list")
 	dir := dirFlag(fs)
@@ -204,11 +200,7 @@ func cmdList(args []string) error {
 		return nil
 	}
 	for _, l := range listing {
-		if l.RequirePresence {
-			fmt.Printf("%s  [presence]\n", l.Key)
-		} else {
-			fmt.Println(l.Key)
-		}
+		fmt.Println(l.Key)
 	}
 	return nil
 }

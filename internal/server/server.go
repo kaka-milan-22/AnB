@@ -99,7 +99,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		}
 
 	case proto.OpEncrypt:
-		if resp, ok := s.guard(identity, []string{req.Key}, req.RequirePresence, "encrypt"); !ok {
+		if resp, ok := s.guard(identity, []string{req.Key}, "encrypt"); !ok {
 			return resp
 		}
 		packed, err := s.store.Encrypt([]byte(req.Plaintext))
@@ -109,7 +109,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		return proto.Response{OK: true, Packed: packed}
 
 	case proto.OpDecrypt:
-		if resp, ok := s.guard(identity, []string{req.Key}, req.RequirePresence, "decrypt"); !ok {
+		if resp, ok := s.guard(identity, []string{req.Key}, "decrypt"); !ok {
 			return resp
 		}
 		pt, err := s.store.Decrypt(req.Packed)
@@ -119,7 +119,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		return proto.Response{OK: true, Plaintext: string(pt)}
 
 	case proto.OpDecryptMany:
-		if resp, ok := s.guard(identity, req.Keys, req.RequirePresence, "decryptMany"); !ok {
+		if resp, ok := s.guard(identity, req.Keys, "decryptMany"); !ok {
 			return resp
 		}
 		out := make([]string, 0, len(req.PackedMany))
@@ -137,21 +137,14 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 	}
 }
 
-// guard runs authorization + presence policy + audit. Returns (resp,false) when
-// the request must be denied; (zero,true) when it may proceed.
-func (s *Server) guard(identity string, keys []string, presence bool, op string) (proto.Response, bool) {
+// guard runs authorization + audit. Returns (resp,false) when the request must
+// be denied; (zero,true) when it may proceed.
+func (s *Server) guard(identity string, keys []string, op string) (proto.Response, bool) {
 	for _, k := range keys {
 		if !s.policy.Allowed(identity, k) {
 			s.audit.Printf("DENY  identity=%q op=%s key=%q reason=unauthorized", identity, op, k)
 			return proto.Response{OK: false, Code: proto.CodeUnauthorized, Error: "not authorized for key " + k}, false
 		}
-	}
-	if presence {
-		if !s.policy.PresenceAllowed(identity) {
-			s.audit.Printf("DENY  identity=%q op=%s keys=%v reason=presence", identity, op, keys)
-			return proto.Response{OK: false, Code: proto.CodePresenceDenied, Error: "identity not permitted to decrypt presence-gated keys"}, false
-		}
-		s.audit.Printf("PRESENCE identity=%q op=%s keys=%v", identity, op, keys)
 	}
 	s.audit.Printf("ALLOW identity=%q op=%s keys=%v", identity, op, keys)
 	return proto.Response{}, true

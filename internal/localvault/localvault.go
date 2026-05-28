@@ -15,11 +15,9 @@ const Version = 1
 
 // SecretEntry mirrors agent-vault's shape; Value is Bob-produced ciphertext.
 type SecretEntry struct {
-	Value           string `json:"value"` // iv:tag:ct from Bob
-	Desc            string `json:"desc,omitempty"`
-	CreatedAt       string `json:"createdAt"`
-	RequirePresence bool   `json:"requirePresence,omitempty"`
-	PresenceReason  string `json:"presenceReason,omitempty"`
+	Value     string `json:"value"` // iv:tag:ct from Bob
+	Desc      string `json:"desc,omitempty"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type Vault struct {
@@ -128,9 +126,8 @@ func mustJSON(v any) []byte {
 // --- Vault helpers ---
 
 type Listing struct {
-	Key             string `json:"key"`
-	Desc            string `json:"desc,omitempty"`
-	RequirePresence bool   `json:"requirePresence,omitempty"`
+	Key  string `json:"key"`
+	Desc string `json:"desc,omitempty"`
 }
 
 func (v *Vault) Has(key string) bool { _, ok := v.Secrets[key]; return ok }
@@ -151,7 +148,7 @@ func (v *Vault) Remove(key string) bool {
 func (v *Vault) List() []Listing {
 	out := make([]Listing, 0, len(v.Secrets))
 	for k, e := range v.Secrets {
-		out = append(out, Listing{Key: k, Desc: e.Desc, RequirePresence: e.RequirePresence})
+		out = append(out, Listing{Key: k, Desc: e.Desc})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
