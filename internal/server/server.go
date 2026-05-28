@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime/debug"
 	"time"
 
 	"github.com/kaka-milan-22/AnB/internal/authz"
@@ -39,7 +40,14 @@ func (s *Server) Serve(ln net.Listener) error {
 		if err != nil {
 			return err
 		}
-		go s.handleConn(conn)
+		go func(c net.Conn) {
+			defer func() {
+				if r := recover(); r != nil {
+					s.audit.Printf("PANIC handler: %v\n%s", r, debug.Stack())
+				}
+			}()
+			s.handleConn(c)
+		}(conn)
 	}
 }
 

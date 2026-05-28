@@ -10,7 +10,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -37,6 +36,14 @@ import (
 )
 
 const pairCodeTTL = 10 * time.Minute
+
+const authzExampleJSON = `{
+  "rules": {
+    "alice-laptop": ["*"],
+    "agent-ci":     ["ci-", "deploy-"]
+  }
+}
+`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -98,11 +105,19 @@ func bobDir(flagDir string) string {
 	return filepath.Join(home, ".anb", "bob")
 }
 
+// writeFile writes data to dir/name atomically: tmp file + rename. Prevents a
+// SIGKILL / power loss mid-write from truncating critical files like
+// envelope.json or ca.key. mode is applied to the temp file (rename preserves).
 func writeFile(dir, name string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name), data, mode)
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func readFile(dir, name string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, name)) }
@@ -210,7 +225,12 @@ func cmdInit(args []string) error {
 	if err := writeFile(d, "server.key", srvKey, 0o600); err != nil {
 		return err
 	}
+	if err := writeFile(d, "authz.json.example", []byte(authzExampleJSON), 0o644); err != nil {
+		return err
+	}
 	fmt.Printf("✓ Master key wrapped (envelope.json) and server cert minted for %v\n", hostList)
+	fmt.Println("✓ Wrote authz.json.example — copy to authz.json and edit before serving in production")
+	fmt.Println("  (without authz.json, Bob runs ALLOW-ALL: every authenticated client can access every key)")
 	return nil
 }
 
@@ -365,8 +385,11 @@ func cmdServe(args []string) error {
 	if password == "" {
 		switch {
 		case isChild:
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			password = strings.TrimRight(line, "\r\n")
+			// Read the password from the parent's pipe via term.ReadLine, which uses
+			// byte-by-byte stdin reads instead of bufio — avoids the same latent
+			// read-ahead drain footgun the term package was refactored to escape.
+			pw, _ := term.ReadLine("")
+			password = pw
 			if password == "" {
 				return fmt.Errorf("daemon: no master password received from parent")
 			}
