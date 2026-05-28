@@ -38,6 +38,14 @@ import (
 
 const pairCodeTTL = 10 * time.Minute
 
+const authzExampleJSON = `{
+  "rules": {
+    "alice-laptop": ["*"],
+    "agent-ci":     ["ci-", "deploy-"]
+  }
+}
+`
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -218,7 +226,12 @@ func cmdInit(args []string) error {
 	if err := writeFile(d, "server.key", srvKey, 0o600); err != nil {
 		return err
 	}
+	if err := writeFile(d, "authz.json.example", []byte(authzExampleJSON), 0o644); err != nil {
+		return err
+	}
 	fmt.Printf("✓ Master key wrapped (envelope.json) and server cert minted for %v\n", hostList)
+	fmt.Println("✓ Wrote authz.json.example — copy to authz.json and edit before serving in production")
+	fmt.Println("  (without authz.json, Bob runs ALLOW-ALL: every authenticated client can access every key)")
 	return nil
 }
 

@@ -150,6 +150,13 @@ State lives in `~/.anb/bob/` (override with `--dir` or `$ANB_BOB_DIR`):
 `ca.crt ca.key server.crt server.key envelope.json authz.json` (plus
 `bob.log` / `bob.pid` when run with `-D`).
 
+**Configure authorization before serving in production.** `bob init` writes an
+`authz.json.example` next to the other state files; copy it to `authz.json` and
+edit the `rules` block so each Alice identity gets only the key prefixes it
+needs. Without `authz.json`, Bob runs ALLOW-ALL (every authenticated client
+sees every key) and logs a warning at startup. See [Authorization](#authorization-authzjson-in-bobs-dir)
+below for the schema.
+
 Hand `ca.crt` to each Alice out of band (it's the public trust anchor).
 
 ### 2. Enroll Alice (with operator pairing)
