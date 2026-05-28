@@ -68,3 +68,15 @@ func Confirm(prompt string, defaultYes bool) (bool, error) {
 	}
 	return a == "y" || a == "yes", nil
 }
+
+// ReadLine prompts on stderr and reads one line from stdin (echo not
+// disabled — for non-secret short inputs like the OOB pairing code).
+// Trailing CR/LF are trimmed.
+func ReadLine(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
