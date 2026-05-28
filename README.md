@@ -52,7 +52,7 @@ request against it (like Kubernetes client-cert auth).
 ## Features
 
 - **Full agent-vault command surface** — `read`, `write`, `has`, `list`, `set`,
-  `get`, `rm`, `import`, `init`, `scan`, `require-presence`.
+  `get`, `rm`, `import`, `init`, `scan`.
 - **Redaction engine** — `read` replaces known secret values and high-entropy
   unvaulted tokens with `<agent-vault:key>` / `<agent-vault:UNVAULTED:sha256:…>`
   placeholders; `write` restores them. Secret values never appear in `read`/`scan`
@@ -72,8 +72,7 @@ request against it (like Kubernetes client-cert auth).
   expires 10 minutes after sign-csr. `--no-pair` on both sides bypasses for
   scripted use.
 - **Per-identity authorization** — map each identity to the key prefixes it may
-  touch, plus an optional presence allowlist for gated keys. Every request is
-  audited.
+  touch. Every request is audited.
 - **Master key custody** — Argon2id-wrapped at rest, `mlock`'d in memory, core
   dumps disabled, `PR_SET_DUMPABLE=0` on Linux, zeroized on idle TTL or shutdown.
 
@@ -92,8 +91,6 @@ protect the endpoints:
   lost.
 - **Bob is a centralized, high-value single point** — it holds the KEK and sees
   all plaintext that flows through it. Harden and audit it accordingly.
-- Presence gating here is a **Bob-side policy** (identity allowlist + audit), not
-  device biometrics.
 - **Enrollment pairing is a human OOB check, not a hard gate.** The 8-digit code
   defends against in-flight cert swaps and operator misclicks; it does *not*
   stop an attacker with filesystem access on Alice (who can copy `client.crt`
@@ -220,10 +217,9 @@ relayed the code into the environment), set `ANB_PAIR_CODE=47281930` before
 # store a secret (interactive, human only — encrypted by Bob, ciphertext stored locally)
 alice set stripe-key
 alice set db-url --from-env DATABASE_URL
-alice set webhook --require-presence --reason "prod webhook signer"
 
 # list / inspect
-alice list                       # gated keys marked [presence]
+alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
@@ -234,9 +230,8 @@ echo 'token: <agent-vault:stripe-key>' | alice write config.yaml
 # audit a file for vaulted + unvaulted secrets
 alice scan config.yaml
 
-# bulk import a .env, toggle presence, remove
+# bulk import a .env, remove
 alice import .env
-alice require-presence stripe-key --on
 alice rm old-key
 ```
 
@@ -252,9 +247,8 @@ scripts/migrate-from-agent-vault.sh --dry-run   # show the plan, change nothing
 scripts/migrate-from-agent-vault.sh             # migrate
 ```
 
-It bulk-imports ordinary keys (restores `<agent-vault:key>` placeholders into a
-temp file, runs `alice import --min-length 1`, then `rm -P`s it) and migrates
-presence-gated keys interactively so their plaintext never touches disk. Key
+It bulk-imports all keys (restores `<agent-vault:key>` placeholders into a
+temp file, runs `alice import --min-length 1`, then `rm -P`s it). Key
 names are preserved, so existing `<agent-vault:key>` placeholders keep resolving.
 It migrates only — it never uninstalls or deletes agent-vault. (A direct
 `agent-vault get --reveal | alice set --stdin` pipe can't work: both tools refuse
@@ -280,21 +274,20 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice read <file>` | Print the file with secrets redacted |
 | `alice write <file> [--content C]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
-| `alice list [--json]` | List key names; gated keys marked `[presence]` |
+| `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
 | `alice status` | Enrollment + Bob reachability/unlock state |
 
 ### alice — sensitive (human only, TTY required)
 
 | Command | Description |
 |---|---|
-| `alice set <key> [--desc D] [--from-env V] [--stdin] [--generate] [--style S] [-l N] [--force] [--require-presence] [--reason R]` | Store a secret (encrypted by Bob); `--generate` makes a random value instead of entering one |
+| `alice set <key> [--desc D] [--from-env V] [--stdin] [--generate] [--style S] [-l N] [--force]` | Store a secret (encrypted by Bob); `--generate` makes a random value instead of entering one |
 | `alice get <key> [--reveal]` | Metadata, or the value with `--reveal` |
 | `alice rm <key>` | Remove a secret |
 | `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
 | `alice import <file> [--min-length N]` | Bulk-import a `.env` file |
 | `alice init` | Initialize an empty local vault |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets |
-| `alice require-presence <key> --on\|--off [--reason R]` | Toggle presence policy on a key |
 
 ### alice — setup
 
@@ -356,14 +349,12 @@ All randomness comes from `crypto/rand`.
   "rules": {
     "alice-laptop": ["*"],
     "agent-ci":     ["ci-", "deploy-"]
-  },
-  "presence": { "allow": ["alice-laptop"] }
+  }
 }
 ```
 
 `rules` maps an identity (client-cert CommonName) to allowed key prefixes
-(`"*"` = all). `presence.allow` lists identities permitted to decrypt
-presence-gated keys. **If `authz.json` is absent, Bob runs allow-all** and logs a
+(`"*"` = all). **If `authz.json` is absent, Bob runs allow-all** and logs a
 warning — fine for first-run, configure it before production.
 
 ---
@@ -391,7 +382,7 @@ gofmt -l .
 ```
 
 `e2e/full_test.go` exercises the whole stack (set → read/redact → write/restore,
-presence gating, locked refusal) against a real Bob over mTLS.
+locked refusal) against a real Bob over mTLS.
 
 ---
 
@@ -401,8 +392,7 @@ v1 is functional. Not yet implemented (planned):
 
 - Bob KEK sealed to a TPM / cloud KMS for unattended restart (v1 unlocks with an
   operator master password).
-- Real device-biometric presence; Alice's client key on hardware (PKCS#11 / Secure
-  Enclave).
+- Alice's client key on hardware (PKCS#11 / Secure Enclave).
 - Certificate revocation lists / short-lived client certs.
 
 ---
