@@ -108,16 +108,17 @@ protect the endpoints:
 Requires **Go 1.23+**.
 
 ```sh
-git clone <repo> AnB && cd AnB
+# fastest: fetch the latest release straight onto your PATH
+go install github.com/kaka-milan-22/AnB/cmd/bob@v1.2.0
+go install github.com/kaka-milan-22/AnB/cmd/alice@v1.2.0
 
-# build both binaries into ./bin
+# …or build from a local clone of the v1.2.0 tag
+git clone --branch v1.2.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
-
-# …or install onto your PATH
-go install ./cmd/bob
-go install ./cmd/alice
 ```
+
+Replace `v1.2.0` with `@latest` to track unreleased changes on `main`.
 
 ---
 
