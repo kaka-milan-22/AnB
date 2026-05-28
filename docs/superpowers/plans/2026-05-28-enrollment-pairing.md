@@ -20,7 +20,7 @@ where code      = 8 ASCII digits (e.g. "47281930")
       pubkey_fp = SHA-256(cert.SubjectPublicKeyInfo DER)  -- 32 bytes
 ```
 
-The OID's third arc `9019028596234243738` is the top 64 bits of UUID `7d2cba5a-4b8d-4e9a-9c6b-1a3f5e7c9d2b` interpreted as big-endian `uint64` (`0x7d2cba5a4b8d4e9a`); chosen once for this project, fits in `int64` for Go's `asn1.ObjectIdentifier` ([]int).
+The OID's third arc `9019789050693635738` is the top 64 bits of UUID `7d2cba5a-4b8d-4e9a-9c6b-1a3f5e7c9d2b` interpreted as big-endian `uint64` (`0x7d2cba5a4b8d4e9a`); chosen once for this project, fits in `int64` for Go's `asn1.ObjectIdentifier` ([]int). Verified: `python3 -c "print(0x7d2cba5a4b8d4e9a)"` → `9019789050693635738`.
 
 ---
 
