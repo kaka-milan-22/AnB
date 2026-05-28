@@ -42,8 +42,9 @@ func PubkeyFingerprint(cert *x509.Certificate) []byte {
 	return sum[:]
 }
 
-// PairingCommit = SHA-256(code || pubkey_fp). Both inputs are raw bytes:
-// code as 8 ASCII digits, pubkey_fp as the 32-byte SHA-256 of SPKI.
+// PairingCommit computes SHA-256(code || pubkey_fp) to bind the OOB code
+// to a specific issued cert. `code` is the 8 ASCII-digit pairing code;
+// `pubkeyFP` is the 32-byte output of PubkeyFingerprint.
 func PairingCommit(code string, pubkeyFP []byte) []byte {
 	h := sha256.New()
 	h.Write([]byte(code))

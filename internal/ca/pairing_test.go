@@ -1,9 +1,11 @@
 package ca
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/pem"
 	"regexp"
 	"testing"
@@ -66,30 +68,30 @@ func TestPubkeyFingerprintMatchesSPKISHA256(t *testing.T) {
 	cert := mustIssueClientCert(t)
 	got := PubkeyFingerprint(cert)
 	want := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	if len(got) != 32 {
-		t.Fatalf("fp len = %d, want 32", len(got))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("fp mismatch at byte %d: got %x want %x", i, got[i], want[i])
-		}
+	if !bytes.Equal(got, want[:]) {
+		t.Fatalf("fp mismatch:\n got %x\n want %x", got, want)
 	}
 }
 
+// TestPairingCommitKnownAnswer locks in the byte order of the construction
+// SHA-256(code || pubkey_fp). The expected digest was pre-computed externally
+// (Python hashlib) so swapping the concat order inside PairingCommit cannot
+// silently keep this test green:
+//
+//	python3 -c "import hashlib; print(hashlib.sha256(b'47281930' + bytes([0xAB]*32)).hexdigest())"
+//	-> 71155bdd6124802b3dd9d9d5b00a6b5d533a03367b5546f2159d3c49fd7323d5
 func TestPairingCommitKnownAnswer(t *testing.T) {
 	code := "47281930"
 	fp := make([]byte, 32)
 	for i := range fp {
 		fp[i] = 0xAB
 	}
-	got := PairingCommit(code, fp)
-	want := sha256.Sum256(append([]byte(code), fp...))
-	if len(got) != 32 {
-		t.Fatalf("commit len = %d, want 32", len(got))
+	want, err := hex.DecodeString("71155bdd6124802b3dd9d9d5b00a6b5d533a03367b5546f2159d3c49fd7323d5")
+	if err != nil {
+		t.Fatalf("decode want: %v", err)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("commit mismatch at byte %d: got %x want %x", i, got[i], want[i])
-		}
+	got := PairingCommit(code, fp)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("commit mismatch:\n got %x\n want %x", got, want)
 	}
 }
