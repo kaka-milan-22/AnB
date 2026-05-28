@@ -106,16 +106,16 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-go install github.com/kaka-milan-22/AnB/cmd/bob@v1.2.0
-go install github.com/kaka-milan-22/AnB/cmd/alice@v1.2.0
+go install github.com/kaka-milan-22/AnB/cmd/bob@v1.3.0
+go install github.com/kaka-milan-22/AnB/cmd/alice@v1.3.0
 
-# …or build from a local clone of the v1.2.0 tag
-git clone --branch v1.2.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v1.3.0 tag
+git clone --branch v1.3.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v1.2.0` with `@latest` to track unreleased changes on `main`.
+Replace `v1.3.0` with `@latest` to track unreleased changes on `main`.
 
 ---
 
