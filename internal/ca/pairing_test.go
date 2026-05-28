@@ -227,6 +227,24 @@ func TestVerifyPairingExpired(t *testing.T) {
 	}
 }
 
+// TestVerifyPairingAtExactExpiry pins the boundary: `now == expiresAt`
+// counts as expired (JWT exp semantics). Reading expiresAt from the cert
+// itself sidesteps clock-skew flakiness.
+func TestVerifyPairingAtExactExpiry(t *testing.T) {
+	cert, code := mintCertForPairing(t, "47281930", 10*time.Minute)
+	p, err := DecodePairing(cert)
+	if err != nil || p == nil {
+		t.Fatalf("decode pairing: p=%v err=%v", p, err)
+	}
+	if err := VerifyPairing(cert, code, p.ExpiresAt); !errors.Is(err, ErrPairingExpired) {
+		t.Fatalf("want ErrPairingExpired at exact expiry, got %v", err)
+	}
+	// One nanosecond before expiry should still verify.
+	if err := VerifyPairing(cert, code, p.ExpiresAt.Add(-time.Nanosecond)); err != nil {
+		t.Fatalf("want nil one nanosecond before expiry, got %v", err)
+	}
+}
+
 func TestVerifyPairingMissingExtension(t *testing.T) {
 	cert := mustIssueClientCert(t)
 	err := VerifyPairing(cert, "00000000", time.Now())

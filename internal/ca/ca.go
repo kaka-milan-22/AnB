@@ -131,23 +131,33 @@ func GenerateCSR(identity string) (csrPEM, keyPEM []byte, err error) {
 	return encode(pemCSR, der), keyPEM, nil
 }
 
+// parseAndValidateCSR decodes a PEM CSR, verifies its self-signature, and
+// requires a non-empty CommonName. Shared by SignCSR and SignCSRWithPairing.
+func parseAndValidateCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
+	blk, _ := pem.Decode(csrPEM)
+	if blk == nil || blk.Type != pemCSR {
+		return nil, errors.New("not a PEM CSR")
+	}
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
+	}
+	if csr.Subject.CommonName == "" {
+		return nil, errors.New("csr has empty CommonName (identity)")
+	}
+	return csr, nil
+}
+
 // SignCSR (Bob side, operator-run) verifies a CSR and issues a client cert
 // using the CSR's public key and CommonName. The operator reviews the CN
 // out-of-band before running this — that human check is the enrollment gate.
 func (c *CA) SignCSR(csrPEM []byte, ttl time.Duration) (certPEM []byte, identity string, err error) {
-	blk, _ := pem.Decode(csrPEM)
-	if blk == nil || blk.Type != pemCSR {
-		return nil, "", errors.New("not a PEM CSR")
-	}
-	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	csr, err := parseAndValidateCSR(csrPEM)
 	if err != nil {
 		return nil, "", err
-	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, "", fmt.Errorf("csr signature: %w", err)
-	}
-	if csr.Subject.CommonName == "" {
-		return nil, "", errors.New("csr has empty CommonName (identity)")
 	}
 	der, err := c.sign(csr.Subject.CommonName, nil, csr.PublicKey, x509.ExtKeyUsageClientAuth, ttl, nil)
 	if err != nil {
@@ -161,19 +171,9 @@ func (c *CA) SignCSR(csrPEM []byte, ttl time.Duration) (certPEM []byte, identity
 // CSR's public key BEFORE calling, so the extension is committed by Bob's
 // signature on the cert as a whole.
 func (c *CA) SignCSRWithPairing(csrPEM []byte, ttl time.Duration, pairing Pairing) (certPEM []byte, identity string, err error) {
-	blk, _ := pem.Decode(csrPEM)
-	if blk == nil || blk.Type != pemCSR {
-		return nil, "", errors.New("not a PEM CSR")
-	}
-	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	csr, err := parseAndValidateCSR(csrPEM)
 	if err != nil {
 		return nil, "", err
-	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, "", fmt.Errorf("csr signature: %w", err)
-	}
-	if csr.Subject.CommonName == "" {
-		return nil, "", errors.New("csr has empty CommonName (identity)")
 	}
 	val, err := pairing.Encode()
 	if err != nil {

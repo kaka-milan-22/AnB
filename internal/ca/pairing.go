@@ -114,8 +114,9 @@ var (
 )
 
 // DecodePairing returns the parsed Pairing from the cert's extension, or
-// (nil, nil) if the extension is absent. Critical-flag is ignored on read
-// (we always write non-critical).
+// (nil, nil) if the extension is absent. Returns a non-nil error if the
+// extension is present but its ASN.1 value is malformed. Critical-flag is
+// ignored on read (we always write non-critical).
 func DecodePairing(cert *x509.Certificate) (*Pairing, error) {
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(PairingOID) {
@@ -126,9 +127,10 @@ func DecodePairing(cert *x509.Certificate) (*Pairing, error) {
 }
 
 // VerifyPairing checks the supplied code against the cert's embedded pairing.
-// Returns nil iff: extension present, now <= expiresAt, and
-// SHA-256(code || pubkey_fp) equals the commit. Constant-time compare on the
-// commit prevents code recovery via timing.
+// Returns nil iff: extension present, now is strictly before expiresAt, and
+// SHA-256(code || pubkey_fp) equals the commit. Exact expiry (`now ==
+// expiresAt`) counts as expired, matching JWT `exp` semantics. Constant-time
+// compare on the commit prevents code recovery via timing.
 func VerifyPairing(cert *x509.Certificate, code string, now time.Time) error {
 	p, err := DecodePairing(cert)
 	if err != nil {
@@ -137,7 +139,7 @@ func VerifyPairing(cert *x509.Certificate, code string, now time.Time) error {
 	if p == nil {
 		return ErrPairingAbsent
 	}
-	if now.After(p.ExpiresAt) {
+	if !now.Before(p.ExpiresAt) {
 		return ErrPairingExpired
 	}
 	got := PairingCommit(code, PubkeyFingerprint(cert))
