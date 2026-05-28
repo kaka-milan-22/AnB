@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net"
 	"runtime/debug"
@@ -21,7 +20,10 @@ import (
 	"github.com/kaka-milan-22/AnB/internal/proto"
 )
 
-const connIdleTimeout = 30 * time.Second
+const (
+	connMaxLifetime = 5 * time.Minute // absolute deadline — kills slowloris and idle conns
+	maxReqBytes     = 1 << 20         // 1 MiB per JSON request (newline-delimited)
+)
 
 type Server struct {
 	store  *keystore.Store
@@ -58,8 +60,9 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 	if err := tc.Handshake(); err != nil {
-		// Failed mTLS (missing/foreign/expired client cert) — never reached
-		// dispatch, so nothing to authorize. Drop quietly.
+		// Failed mTLS (missing/foreign/expired client cert). Never reached
+		// dispatch, but audit-log the remote + error class so a probe leaves a trace.
+		s.audit.Printf("HANDSHAKE_FAIL remote=%s err=%v", conn.RemoteAddr(), err)
 		return
 	}
 	identity := peerIdentity(tc)
@@ -67,11 +70,23 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	r := bufio.NewReader(conn)
+	// Absolute connection lifetime — kills slowloris and idle conns regardless of
+	// per-read activity. The KMS workload is request-response in <1s; 5 min is
+	// plenty of headroom for any legitimate batch.
+	_ = conn.SetDeadline(time.Now().Add(connMaxLifetime))
+
+	// Cap each newline-delimited request at maxReqBytes via ReadSlice on a
+	// fixed-size bufio reader. Without this an authenticated client could send
+	// an unbounded line and OOM Bob.
+	r := bufio.NewReaderSize(conn, maxReqBytes)
 	enc := json.NewEncoder(conn) // Encode appends '\n' → newline-delimited
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(connIdleTimeout))
-		line, err := r.ReadBytes('\n')
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			s.audit.Printf("DROP identity=%q reason=request-too-large", identity)
+			_ = enc.Encode(proto.Response{OK: false, Code: proto.CodeBadRequest, Error: "request exceeds 1 MiB"})
+			return
+		}
 		if len(line) > 0 {
 			var req proto.Request
 			if jErr := json.Unmarshal(line, &req); jErr != nil {
@@ -81,9 +96,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				// timeout or read error — just close
-			}
+			// EOF, deadline exceeded, or other read error — just close.
 			return
 		}
 	}
