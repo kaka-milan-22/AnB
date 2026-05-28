@@ -504,7 +504,7 @@ func daemonize(dir, logPath, password string) error {
 	pw.Close()
 
 	pid := cmd.Process.Pid
-	_ = os.WriteFile(filepath.Join(dir, "bob.pid"), []byte(fmt.Sprintf("%d\n", pid)), 0o644)
+	_ = writeFile(dir, "bob.pid", []byte(fmt.Sprintf("%d\n", pid)), 0o600)
 	_ = cmd.Process.Release() // fire-and-forget; let init reap it
 	fmt.Printf("✓ bob daemonized (pid %d) → %s\n", pid, logPath)
 	fmt.Printf("  stop: kill %d   (master key zeroized on SIGTERM)\n", pid)

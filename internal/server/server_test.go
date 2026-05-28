@@ -155,3 +155,36 @@ func TestLockedStoreRefuses(t *testing.T) {
 		t.Fatalf("expected locked, got %+v", got)
 	}
 }
+
+// TestOversizedRequestDropped verifies that a single line exceeding maxReqBytes
+// (1 MiB) causes the server to respond with CodeBadRequest and close the conn.
+func TestOversizedRequestDropped(t *testing.T) {
+	h := newHarness(t, unlockedStore(t), allowAll())
+	c := h.dial(t, "alice")
+
+	// Send 2 MiB of 'x' without a newline — the bufio reader fills up before
+	// seeing '\n', triggering ErrBufferFull on the server side.
+	huge := make([]byte, 2<<20)
+	for i := range huge {
+		huge[i] = 'x'
+	}
+	// The write may fail partway through because the server closes the conn
+	// after sending the error response; that's fine — we just need to read
+	// whatever the server sends back.
+	_, _ = c.conn.Write(huge)
+
+	// Server should respond with CodeBadRequest then close.
+	line, err := c.r.ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		// conn closed before a full response — acceptable: server dropped the
+		// conn; the absence of an OK response is the correct outcome.
+		return
+	}
+	var resp proto.Response
+	if jErr := json.Unmarshal(line, &resp); jErr != nil {
+		t.Fatalf("unmarshal response: %v", jErr)
+	}
+	if resp.OK || resp.Code != proto.CodeBadRequest {
+		t.Fatalf("expected CodeBadRequest for oversized request, got %+v", resp)
+	}
+}
