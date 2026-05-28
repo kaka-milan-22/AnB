@@ -324,7 +324,7 @@
   <section>
     <h2><span class="num">06</span>Trust boundary — read this</h2>
     <p>mTLS protects the <b>wire</b> and authenticates both ends. It does <b>not</b> protect the endpoints. Be honest about what this design does and doesn't buy:</p>
-    <div class="grid cols-2" style="margin-top:18px">
+    <div class="grid cols-3" style="margin-top:18px">
       <div class="callout warn"><h3>Endpoints see plaintext</h3><p>It lives in Bob's memory (it decrypts) and in Alice's process (it receives results). A compromised Alice gets the plaintext it asks for — unavoidable.</p></div>
       <div class="callout warn"><h3>Client key = secret-zero</h3><p>Whoever steals Alice's client private key can impersonate her to Bob. Keep it <code>0600</code>; revoke and reissue if lost.</p></div>
       <div class="callout warn"><h3>Bob is a central SPOF</h3><p>It holds the KEK and sees all plaintext flowing through it. Harden and audit it as the crown jewel.</p></div>
