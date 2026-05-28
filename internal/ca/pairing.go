@@ -16,14 +16,16 @@ import (
 // under the 2.25 (UUID-based) arc. Project-internal; not registered.
 var PairingOID = asn1.ObjectIdentifier{2, 25, 0x7d2cba5a4b8d4e9a}
 
-// pairingCodeRange is exclusive upper bound: 10^8.
-var pairingCodeRange = big.NewInt(100_000_000)
+// pairingCodeRange is the exclusive upper bound passed to crypto/rand.Int.
+// Allocated per call — keeping a package-level *big.Int would be a footgun
+// because big.Int is mutable.
+func pairingCodeRange() *big.Int { return big.NewInt(100_000_000) }
 
 // NewPairingCode returns a fresh 8-digit decimal code (with leading zeros)
 // drawn from crypto/rand. ~26.6 bits of entropy; sized for one-shot OOB use
 // inside the 10-minute window, not as a credential.
 func NewPairingCode() (string, error) {
-	n, err := rand.Int(rand.Reader, pairingCodeRange)
+	n, err := rand.Int(rand.Reader, pairingCodeRange())
 	if err != nil {
 		return "", fmt.Errorf("crypto/rand: %w", err)
 	}

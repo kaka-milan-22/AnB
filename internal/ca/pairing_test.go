@@ -29,7 +29,10 @@ func TestNewPairingCodeFormat(t *testing.T) {
 func TestNewPairingCodeNotConstant(t *testing.T) {
 	seen := make(map[string]struct{})
 	for i := 0; i < 32; i++ {
-		c, _ := NewPairingCode()
+		c, err := NewPairingCode()
+		if err != nil {
+			t.Fatalf("NewPairingCode: %v", err)
+		}
 		seen[c] = struct{}{}
 	}
 	if len(seen) < 16 { // 16/32 distinct is a very loose lower bound
