@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
-	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -55,10 +54,13 @@ func PairingCommit(code string, pubkeyFP []byte) []byte {
 }
 
 // Pairing is the deserialized contents of the X.509 extension. ExpiresAt is
-// stored in UTC to match ASN.1 GeneralizedTime semantics.
+// stored in UTC and at second precision — Encode truncates sub-second nanos
+// because ASN.1 GeneralizedTime serialises to whole seconds and a lossy
+// round-trip would otherwise turn a "valid now" code into "valid <1s ago"
+// on the verify side.
 type Pairing struct {
 	Commit    []byte    // 32 bytes
-	ExpiresAt time.Time // UTC
+	ExpiresAt time.Time // UTC, second precision
 }
 
 // asn1Pairing is the wire form: SEQUENCE { commit OCTET STRING, expiresAt GeneralizedTime }.
@@ -68,17 +70,22 @@ type asn1Pairing struct {
 }
 
 // Encode marshals the Pairing as the bytes that go into the X.509 extension
-// Value field.
+// Value field. ExpiresAt is normalised to UTC and truncated to whole seconds
+// (GeneralizedTime cannot carry sub-second precision).
 func (p Pairing) Encode() ([]byte, error) {
 	if len(p.Commit) != 32 {
 		return nil, fmt.Errorf("pairing commit: want 32 bytes, got %d", len(p.Commit))
 	}
-	w := asn1Pairing{Commit: p.Commit, ExpiresAt: p.ExpiresAt.UTC()}
+	w := asn1Pairing{
+		Commit:    p.Commit,
+		ExpiresAt: p.ExpiresAt.UTC().Truncate(time.Second),
+	}
 	return asn1.Marshal(w)
 }
 
-// decodePairingValue is the inverse of Encode. Package-private because the
-// public entry point is DecodePairing(cert).
+// decodePairingValue is the inverse of Encode. Package-private; higher-level
+// callers (Task 4's DecodePairing) extract the extension from a cert first
+// and then route the raw value here.
 func decodePairingValue(b []byte) (*Pairing, error) {
 	var w asn1Pairing
 	rest, err := asn1.Unmarshal(b, &w)
@@ -86,7 +93,7 @@ func decodePairingValue(b []byte) (*Pairing, error) {
 		return nil, fmt.Errorf("pairing asn1: %w", err)
 	}
 	if len(rest) != 0 {
-		return nil, errors.New("pairing asn1: trailing bytes")
+		return nil, fmt.Errorf("pairing asn1: %d trailing bytes", len(rest))
 	}
 	if len(w.Commit) != 32 {
 		return nil, fmt.Errorf("pairing commit: want 32 bytes, got %d", len(w.Commit))

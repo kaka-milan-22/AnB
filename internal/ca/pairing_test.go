@@ -126,3 +126,27 @@ func TestPairingEncodeRejectsWrongCommitSize(t *testing.T) {
 		t.Fatal("expected error for short commit")
 	}
 }
+
+// TestPairingEncodeTruncatesSubSecond pins the API contract: ExpiresAt
+// passes through Encode/decode at second precision, even if the caller
+// supplied nanoseconds. Without truncation in Encode a `time.Now().Add(ttl)`
+// would silently lose its nanoseconds and round-trip as "valid <1s ago".
+func TestPairingEncodeTruncatesSubSecond(t *testing.T) {
+	commit := make([]byte, 32)
+	exp := time.Date(2026, 5, 28, 14, 23, 5, 123_456_789, time.UTC)
+	b, err := Pairing{Commit: commit, ExpiresAt: exp}.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	out, err := decodePairingValue(b)
+	if err != nil {
+		t.Fatalf("decodePairingValue: %v", err)
+	}
+	want := exp.Truncate(time.Second)
+	if !out.ExpiresAt.Equal(want) {
+		t.Fatalf("ExpiresAt: got %v want %v (input had nanos %d)", out.ExpiresAt, want, exp.Nanosecond())
+	}
+	if out.ExpiresAt.Nanosecond() != 0 {
+		t.Fatalf("expected 0 nanos after round-trip, got %d", out.ExpiresAt.Nanosecond())
+	}
+}
