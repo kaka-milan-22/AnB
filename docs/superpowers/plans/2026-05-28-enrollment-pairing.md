@@ -20,7 +20,7 @@ where code      = 8 ASCII digits (e.g. "47281930")
       pubkey_fp = SHA-256(cert.SubjectPublicKeyInfo DER)  -- 32 bytes
 ```
 
-The OID's third arc `9019789050693635738` is the top 64 bits of UUID `7d2cba5a-4b8d-4e9a-9c6b-1a3f5e7c9d2b` interpreted as big-endian `uint64` (`0x7d2cba5a4b8d4e9a`); chosen once for this project, fits in `int64` for Go's `asn1.ObjectIdentifier` ([]int). Verified: `python3 -c "print(0x7d2cba5a4b8d4e9a)"` → `9019789050693635738`.
+The OID is `{2, 25, 0x7d2cba5a, 0x4b8d4e9a}` — the top 64 bits of UUID `7d2cba5a-4b8d-4e9a-9c6b-1a3f5e7c9d2b` split into **two 32-bit arcs** rather than one 64-bit arc. Go `encoding/asn1` happily encodes the single-arc form, but `crypto/x509.ParseCertificate` caps each OID arc at 31 bits via `readBase128Int`, so a 63-bit arc encodes fine but readback fails with `x509: malformed extension OID field`. Splitting into 32-bit halves (each `< 2^31`) keeps the same UUID identity end-to-end. This was discovered during T4+T5 implementation; the originally-planned single-arc form `9019789050693635738` does not survive a cert round-trip.
 
 ---
 
