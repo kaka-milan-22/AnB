@@ -4,12 +4,10 @@
 #
 # What it does:
 #   1. Reads key names (NOT values) from `agent-vault list --json`.
-#   2. Bulk-migrates non-presence keys: builds a placeholder template, has
-#      agent-vault restore real values into a temp file, then `alice import`s it.
+#   2. Bulk-migrates every key: builds a placeholder template, has agent-vault
+#      restore real values into a temp file, then `alice import`s it.
 #      The temp file is overwritten (`rm -P`) immediately after.
-#   3. Migrates presence-gated keys interactively (`alice set --require-presence`)
-#      so their plaintext never touches disk — you paste them at the prompt.
-#   4. Verifies the result with `alice list`.
+#   3. Verifies the result with `alice list`.
 #
 # Why it's shaped this way (hard-won quirks):
 #   - `agent-vault get --reveal | alice set --stdin` does NOT work: both tools
@@ -22,8 +20,8 @@
 #     reported for manual handling.
 #   - import's default --min-length 8 silently skips short values (e.g. an SMTP
 #     port "587"); we pass --min-length 1.
-#   - import does NOT carry over a presence flag, which is the other reason
-#     presence-gated keys go the interactive route (where --require-presence sets it).
+#   - For zero SSD residue, point TMPDIR at a RAM disk before running this script
+#     (the temp file is also overwritten with `rm -P` on exit).
 #
 # Requires: agent-vault, alice (on PATH), jq, and Bob already serving + unlocked.
 # This script migrates only; it does NOT uninstall or delete agent-vault.
@@ -69,8 +67,8 @@ fi
 # (bash 3.2 compatible: no mapfile, no bare empty-array expansion under set -u)
 LIST_JSON="$(agent-vault list --json)"
 
-IMPORTABLE=()   # non-presence keys expressible as a .env LHS
-SKIP=()         # non-presence keys that can't round-trip (e.g. digit-leading)
+IMPORTABLE=()   # keys expressible as a .env LHS
+SKIP=()         # keys that can't round-trip (e.g. digit-leading)
 while IFS= read -r k; do
   [[ -z "$k" ]] && continue
   envkey="${k//-/_}"
@@ -79,19 +77,12 @@ while IFS= read -r k; do
   else
     SKIP+=("$k")
   fi
-done < <(jq -r '.keys[] | select(.requirePresence != true) | .key' <<<"$LIST_JSON")
-
-PRESENCE_KEYS=()
-while IFS= read -r k; do
-  [[ -n "$k" ]] && PRESENCE_KEYS+=("$k")
-done < <(jq -r '.keys[] | select(.requirePresence == true) | .key' <<<"$LIST_JSON")
+done < <(jq -r '.keys[].key' <<<"$LIST_JSON")
 
 # --- plan ------------------------------------------------------------------
 info "${c_dim}agent-vault → AnB migration plan${c_off}"
 info "  bulk (temp-file import, --min-length $MINLEN): ${#IMPORTABLE[@]}"
 if ((${#IMPORTABLE[@]})); then for k in "${IMPORTABLE[@]}"; do info "    $k"; done; fi
-info "  presence-gated (interactive, never on disk):  ${#PRESENCE_KEYS[@]}"
-if ((${#PRESENCE_KEYS[@]})); then for k in "${PRESENCE_KEYS[@]}"; do info "    $k  [presence]"; done; fi
 if ((${#SKIP[@]})); then
   warn "cannot auto-migrate (handle manually with: alice set <key>): ${#SKIP[@]}"
   for k in "${SKIP[@]}"; do info "    $k"; done
@@ -111,7 +102,6 @@ cleanup() {
   rm -rf "$TMPD" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
-# For zero SSD residue, point TMPDIR at a RAM disk before running this script.
 
 # --- bulk migration --------------------------------------------------------
 if ((${#IMPORTABLE[@]})); then
@@ -127,16 +117,6 @@ if ((${#IMPORTABLE[@]})); then
   rm -Pf "$MIGFILE"
   ok "bulk keys imported"
 fi
-
-# --- presence-gated migration (interactive, no disk) -----------------------
-if ((${#PRESENCE_KEYS[@]})); then for k in "${PRESENCE_KEYS[@]}"; do
-  info ""
-  info "${c_warn}presence-gated:${c_off} $k — migrate interactively (value stays off disk)"
-  info "  current value from agent-vault (may prompt Touch ID):"
-  agent-vault get "$k" --reveal || { warn "could not reveal $k; skipping"; continue; }
-  info "  now paste it into AnB:"
-  alice set "$k" --require-presence --reason "migrated from agent-vault"
-done; fi
 
 # --- verify ----------------------------------------------------------------
 info ""
