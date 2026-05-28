@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"math/big"
+	"time"
 )
 
 // PairingOID is the X.509 extension OID for the pairing payload.
@@ -50,4 +52,44 @@ func PairingCommit(code string, pubkeyFP []byte) []byte {
 	h.Write([]byte(code))
 	h.Write(pubkeyFP)
 	return h.Sum(nil)
+}
+
+// Pairing is the deserialized contents of the X.509 extension. ExpiresAt is
+// stored in UTC to match ASN.1 GeneralizedTime semantics.
+type Pairing struct {
+	Commit    []byte    // 32 bytes
+	ExpiresAt time.Time // UTC
+}
+
+// asn1Pairing is the wire form: SEQUENCE { commit OCTET STRING, expiresAt GeneralizedTime }.
+type asn1Pairing struct {
+	Commit    []byte
+	ExpiresAt time.Time `asn1:"generalized"`
+}
+
+// Encode marshals the Pairing as the bytes that go into the X.509 extension
+// Value field.
+func (p Pairing) Encode() ([]byte, error) {
+	if len(p.Commit) != 32 {
+		return nil, fmt.Errorf("pairing commit: want 32 bytes, got %d", len(p.Commit))
+	}
+	w := asn1Pairing{Commit: p.Commit, ExpiresAt: p.ExpiresAt.UTC()}
+	return asn1.Marshal(w)
+}
+
+// decodePairingValue is the inverse of Encode. Package-private because the
+// public entry point is DecodePairing(cert).
+func decodePairingValue(b []byte) (*Pairing, error) {
+	var w asn1Pairing
+	rest, err := asn1.Unmarshal(b, &w)
+	if err != nil {
+		return nil, fmt.Errorf("pairing asn1: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, errors.New("pairing asn1: trailing bytes")
+	}
+	if len(w.Commit) != 32 {
+		return nil, fmt.Errorf("pairing commit: want 32 bytes, got %d", len(w.Commit))
+	}
+	return &Pairing{Commit: w.Commit, ExpiresAt: w.ExpiresAt.UTC()}, nil
 }

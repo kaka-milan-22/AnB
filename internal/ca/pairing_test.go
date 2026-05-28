@@ -95,3 +95,34 @@ func TestPairingCommitKnownAnswer(t *testing.T) {
 		t.Fatalf("commit mismatch:\n got %x\n want %x", got, want)
 	}
 }
+
+func TestPairingEncodeDecodeRoundTrip(t *testing.T) {
+	commit := make([]byte, 32)
+	for i := range commit {
+		commit[i] = byte(i)
+	}
+	exp := time.Date(2026, 5, 28, 14, 23, 5, 0, time.UTC)
+	in := Pairing{Commit: commit, ExpiresAt: exp}
+
+	b, err := in.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	out, err := decodePairingValue(b)
+	if err != nil {
+		t.Fatalf("decodePairingValue: %v", err)
+	}
+	if !out.ExpiresAt.Equal(exp) {
+		t.Fatalf("ExpiresAt round-trip: got %v want %v", out.ExpiresAt, exp)
+	}
+	if !bytes.Equal(out.Commit, commit) {
+		t.Fatalf("commit round-trip mismatch:\n got %x\n want %x", out.Commit, commit)
+	}
+}
+
+func TestPairingEncodeRejectsWrongCommitSize(t *testing.T) {
+	p := Pairing{Commit: []byte{1, 2, 3}, ExpiresAt: time.Now()}
+	if _, err := p.Encode(); err == nil {
+		t.Fatal("expected error for short commit")
+	}
+}
