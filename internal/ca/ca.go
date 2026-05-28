@@ -100,7 +100,7 @@ func (c *CA) issueLeaf(cn string, hosts []string, eku x509.ExtKeyUsage, ttl time
 	if err != nil {
 		return nil, nil, err
 	}
-	der, err := c.sign(cn, hosts, pub, eku, ttl)
+	der, err := c.sign(cn, hosts, pub, eku, ttl, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -149,25 +149,57 @@ func (c *CA) SignCSR(csrPEM []byte, ttl time.Duration) (certPEM []byte, identity
 	if csr.Subject.CommonName == "" {
 		return nil, "", errors.New("csr has empty CommonName (identity)")
 	}
-	der, err := c.sign(csr.Subject.CommonName, nil, csr.PublicKey, x509.ExtKeyUsageClientAuth, ttl)
+	der, err := c.sign(csr.Subject.CommonName, nil, csr.PublicKey, x509.ExtKeyUsageClientAuth, ttl, nil)
 	if err != nil {
 		return nil, "", err
 	}
 	return encode(pemCert, der), csr.Subject.CommonName, nil
 }
 
-func (c *CA) sign(cn string, hosts []string, pub any, eku x509.ExtKeyUsage, ttl time.Duration) ([]byte, error) {
+// SignCSRWithPairing is SignCSR plus a non-critical X.509 extension carrying
+// the supplied Pairing. The caller computes the commit binding `code` to the
+// CSR's public key BEFORE calling, so the extension is committed by Bob's
+// signature on the cert as a whole.
+func (c *CA) SignCSRWithPairing(csrPEM []byte, ttl time.Duration, pairing Pairing) (certPEM []byte, identity string, err error) {
+	blk, _ := pem.Decode(csrPEM)
+	if blk == nil || blk.Type != pemCSR {
+		return nil, "", errors.New("not a PEM CSR")
+	}
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, "", fmt.Errorf("csr signature: %w", err)
+	}
+	if csr.Subject.CommonName == "" {
+		return nil, "", errors.New("csr has empty CommonName (identity)")
+	}
+	val, err := pairing.Encode()
+	if err != nil {
+		return nil, "", fmt.Errorf("pairing encode: %w", err)
+	}
+	extras := []pkix.Extension{{Id: PairingOID, Critical: false, Value: val}}
+	der, err := c.sign(csr.Subject.CommonName, nil, csr.PublicKey, x509.ExtKeyUsageClientAuth, ttl, extras)
+	if err != nil {
+		return nil, "", err
+	}
+	return encode(pemCert, der), csr.Subject.CommonName, nil
+}
+
+func (c *CA) sign(cn string, hosts []string, pub any, eku x509.ExtKeyUsage, ttl time.Duration, extras []pkix.Extension) ([]byte, error) {
 	sn, err := serial()
 	if err != nil {
 		return nil, err
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(ttl),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+		SerialNumber:    sn,
+		Subject:         pkix.Name{CommonName: cn},
+		NotBefore:       time.Now().Add(-time.Minute),
+		NotAfter:        time.Now().Add(ttl),
+		KeyUsage:        x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:     []x509.ExtKeyUsage{eku},
+		ExtraExtensions: extras,
 	}
 	for _, h := range hosts {
 		if ip := net.ParseIP(h); ip != nil {

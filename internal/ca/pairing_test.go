@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"regexp"
 	"testing"
 	"time"
 )
 
 func TestPairingOIDValue(t *testing.T) {
-	want := asn1.ObjectIdentifier{2, 25, 0x7d2cba5a4b8d4e9a}
+	// Two arcs encode the UUID top-64-bits as 32-bit halves; each arc must fit
+	// within Go crypto/x509's 31-bit OID component limit (readBase128Int cap).
+	want := asn1.ObjectIdentifier{2, 25, 0x7d2cba5a, 0x4b8d4e9a}
 	if !PairingOID.Equal(want) {
 		t.Fatalf("PairingOID = %v, want %v", PairingOID, want)
 	}
@@ -148,5 +152,102 @@ func TestPairingEncodeTruncatesSubSecond(t *testing.T) {
 	}
 	if out.ExpiresAt.Nanosecond() != 0 {
 		t.Fatalf("expected 0 nanos after round-trip, got %d", out.ExpiresAt.Nanosecond())
+	}
+}
+
+// mintCertForPairing mints a fresh client cert with a real pairing extension
+// whose commit binds the given code. Returns the parsed cert + the code.
+func mintCertForPairing(t *testing.T, code string, ttl time.Duration) (*x509.Certificate, string) {
+	t.Helper()
+	c, err := NewCA("vt-ca", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrPEM, _, err := GenerateCSR("vt-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(csrPEM)
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := sha256.Sum256(csr.RawSubjectPublicKeyInfo)
+	commit := PairingCommit(code, fp[:])
+	certPEM, _, err := c.SignCSRWithPairing(csrPEM, time.Hour, Pairing{
+		Commit:    commit,
+		ExpiresAt: time.Now().Add(ttl),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb, _ := pem.Decode(certPEM)
+	if cb == nil {
+		t.Fatal("not a PEM cert")
+	}
+	cert, err := x509.ParseCertificate(cb.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, code
+}
+
+func TestDecodePairingReturnsNilWhenAbsent(t *testing.T) {
+	cert := mustIssueClientCert(t) // no pairing extension
+	p, err := DecodePairing(cert)
+	if err != nil {
+		t.Fatalf("DecodePairing: %v", err)
+	}
+	if p != nil {
+		t.Fatalf("expected nil, got %+v", p)
+	}
+}
+
+func TestVerifyPairingHappyPath(t *testing.T) {
+	cert, code := mintCertForPairing(t, "47281930", 10*time.Minute)
+	if err := VerifyPairing(cert, code, time.Now()); err != nil {
+		t.Fatalf("VerifyPairing: %v", err)
+	}
+}
+
+func TestVerifyPairingWrongCode(t *testing.T) {
+	cert, _ := mintCertForPairing(t, "47281930", 10*time.Minute)
+	err := VerifyPairing(cert, "00000000", time.Now())
+	if !errors.Is(err, ErrPairingMismatch) {
+		t.Fatalf("want ErrPairingMismatch, got %v", err)
+	}
+}
+
+func TestVerifyPairingExpired(t *testing.T) {
+	cert, code := mintCertForPairing(t, "47281930", 10*time.Minute)
+	future := time.Now().Add(11 * time.Minute)
+	err := VerifyPairing(cert, code, future)
+	if !errors.Is(err, ErrPairingExpired) {
+		t.Fatalf("want ErrPairingExpired, got %v", err)
+	}
+}
+
+func TestVerifyPairingMissingExtension(t *testing.T) {
+	cert := mustIssueClientCert(t)
+	err := VerifyPairing(cert, "00000000", time.Now())
+	if !errors.Is(err, ErrPairingAbsent) {
+		t.Fatalf("want ErrPairingAbsent, got %v", err)
+	}
+}
+
+func TestSignCSRWithPairingEmbedsNonCriticalExt(t *testing.T) {
+	cert, _ := mintCertForPairing(t, "12345678", time.Minute)
+	var found *pkix.Extension
+	for i, ext := range cert.Extensions {
+		if ext.Id.Equal(PairingOID) {
+			found = &cert.Extensions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("pairing extension missing from signed cert")
+	}
+	if found.Critical {
+		t.Fatal("pairing extension must be non-critical")
 	}
 }
