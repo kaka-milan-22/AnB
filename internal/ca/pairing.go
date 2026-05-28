@@ -6,6 +6,8 @@ package ca
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
 	"math/big"
@@ -30,4 +32,21 @@ func NewPairingCode() (string, error) {
 		return "", fmt.Errorf("crypto/rand: %w", err)
 	}
 	return fmt.Sprintf("%08d", n.Int64()), nil
+}
+
+// PubkeyFingerprint returns SHA-256 of the cert's SubjectPublicKeyInfo DER.
+// This is the binding handle used by PairingCommit — the same bytes Alice
+// will recompute from the installed cert.
+func PubkeyFingerprint(cert *x509.Certificate) []byte {
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return sum[:]
+}
+
+// PairingCommit = SHA-256(code || pubkey_fp). Both inputs are raw bytes:
+// code as 8 ASCII digits, pubkey_fp as the 32-byte SHA-256 of SPKI.
+func PairingCommit(code string, pubkeyFP []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte(code))
+	h.Write(pubkeyFP)
+	return h.Sum(nil)
 }
