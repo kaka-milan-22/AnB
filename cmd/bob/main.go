@@ -240,6 +240,11 @@ func cmdSignCSR(args []string) error {
 	}
 
 	// Pre-parse to surface CSR identity + pubkey fingerprint to the operator.
+	// CRITICAL: verify the CSR's self-signature BEFORE displaying anything.
+	// Otherwise an attacker could craft a CSR with a forged CommonName + an
+	// invalid signature; the operator would see the fake identity, confirm,
+	// and have already transmitted the pairing code OOB by the time the later
+	// SignCSR{,WithPairing} call rejected the bad signature.
 	blk, _ := pem.Decode(csrPEM)
 	if blk == nil || blk.Type != "CERTIFICATE REQUEST" {
 		return fmt.Errorf("not a PEM CSR: %s", rest[0])
@@ -247,6 +252,9 @@ func cmdSignCSR(args []string) error {
 	csr, err := x509.ParseCertificateRequest(blk.Bytes)
 	if err != nil {
 		return fmt.Errorf("parse CSR: %w", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return fmt.Errorf("CSR signature invalid: %w", err)
 	}
 	if csr.Subject.CommonName == "" {
 		return fmt.Errorf("CSR has empty CommonName")
@@ -269,6 +277,7 @@ func cmdSignCSR(args []string) error {
 		if err != nil {
 			return err
 		}
+		fmt.Fprintf(os.Stderr, "✓ signed cert for identity %q\n", csr.Subject.CommonName)
 		return writeOrStdout(out, certPEM)
 	}
 
@@ -298,6 +307,8 @@ func cmdSignCSR(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "✓ signed cert for identity %q (pairing code expires at %s)\n",
+		csr.Subject.CommonName, expires.UTC().Format("15:04:05 UTC"))
 	return writeOrStdout(out, certPEM)
 }
 

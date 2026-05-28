@@ -4,9 +4,9 @@
 package term
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -58,7 +58,7 @@ func Confirm(prompt string, defaultYes bool) (bool, error) {
 		hint = "[Y/n]"
 	}
 	fmt.Fprintf(os.Stderr, "%s %s ", prompt, hint)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := readLine(os.Stdin)
 	if err != nil && line == "" {
 		return false, err
 	}
@@ -74,9 +74,31 @@ func Confirm(prompt string, defaultYes bool) (bool, error) {
 // Trailing CR/LF are trimmed.
 func ReadLine(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := readLine(os.Stdin)
 	if err != nil && line == "" {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// readLine reads one byte at a time until '\n' or EOF. Avoids bufio so that
+// sequential Confirm/ReadLine calls cannot drain each other's stdin via a
+// discarded buffered-reader's read-ahead. Trailing '\n' is consumed but the
+// returned string still carries '\r' (if any) — callers strip per their own
+// trimming rules.
+func readLine(r io.Reader) (string, error) {
+	var b []byte
+	one := make([]byte, 1)
+	for {
+		n, err := r.Read(one)
+		if n > 0 {
+			if one[0] == '\n' {
+				return string(b), nil
+			}
+			b = append(b, one[0])
+		}
+		if err != nil {
+			return string(b), err
+		}
+	}
 }
