@@ -10,7 +10,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -386,8 +385,11 @@ func cmdServe(args []string) error {
 	if password == "" {
 		switch {
 		case isChild:
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			password = strings.TrimRight(line, "\r\n")
+			// Read the password from the parent's pipe via term.ReadLine, which uses
+			// byte-by-byte stdin reads instead of bufio — avoids the same latent
+			// read-ahead drain footgun the term package was refactored to escape.
+			pw, _ := term.ReadLine("")
+			password = pw
 			if password == "" {
 				return fmt.Errorf("daemon: no master password received from parent")
 			}
