@@ -11,7 +11,11 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +35,8 @@ import (
 	"github.com/kaka-milan-22/AnB/internal/server"
 	"github.com/kaka-milan-22/AnB/internal/term"
 )
+
+const pairCodeTTL = 10 * time.Minute
 
 func main() {
 	if len(os.Args) < 2 {
@@ -215,9 +221,10 @@ func cmdSignCSR(args []string) error {
 	dir := fs.String("dir", "", "state dir")
 	out := fs.String("out", "", "write client cert here (default: stdout)")
 	days := fs.Int("ttl-days", 90, "client cert validity in days")
+	noPair := fs.Bool("no-pair", false, "skip OOB pairing — sign without an enrollment code (warned)")
 	rest := parse(fs, args)
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: bob sign-csr <csr.pem> [--out FILE] [--ttl-days N]")
+		return fmt.Errorf("usage: bob sign-csr <csr.pem> [--out FILE] [--ttl-days N] [--no-pair]")
 	}
 
 	d := bobDir(*dir)
@@ -231,11 +238,72 @@ func cmdSignCSR(args []string) error {
 	if err != nil {
 		return err
 	}
-	certPEM, identity, err := authority.SignCSR(csrPEM, time.Duration(*days)*24*time.Hour)
+
+	// Pre-parse to surface CSR identity + pubkey fingerprint to the operator.
+	blk, _ := pem.Decode(csrPEM)
+	if blk == nil || blk.Type != "CERTIFICATE REQUEST" {
+		return fmt.Errorf("not a PEM CSR: %s", rest[0])
+	}
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse CSR: %w", err)
+	}
+	if csr.Subject.CommonName == "" {
+		return fmt.Errorf("CSR has empty CommonName")
+	}
+	fp := sha256.Sum256(csr.RawSubjectPublicKeyInfo)
+	fpHex := hex.EncodeToString(fp[:])
+
+	if *noPair {
+		fmt.Fprintf(os.Stderr, "⚠ --no-pair: signing without an OOB pairing code (any holder of this cert can install it)\n")
+		fmt.Fprintf(os.Stderr, "→ CSR identity:  %s\n", csr.Subject.CommonName)
+		fmt.Fprintf(os.Stderr, "→ CSR pubkey fp: %s\n", fpHex)
+		ok, err := term.Confirm(fmt.Sprintf("Sign %q without pairing?", csr.Subject.CommonName), false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("aborted")
+		}
+		certPEM, _, err := authority.SignCSR(csrPEM, time.Duration(*days)*24*time.Hour)
+		if err != nil {
+			return err
+		}
+		return writeOrStdout(out, certPEM)
+	}
+
+	code, err := ca.NewPairingCode()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "→ signing client cert for identity %q (review before distributing)\n", identity)
+	expires := time.Now().Add(pairCodeTTL)
+	commit := ca.PairingCommit(code, fp[:])
+
+	fmt.Fprintf(os.Stderr, "→ CSR identity:  %s\n", csr.Subject.CommonName)
+	fmt.Fprintf(os.Stderr, "→ CSR pubkey fp: %s\n", fpHex)
+	fmt.Fprintf(os.Stderr, "→ Pairing code:  %s   (show to Alice OOB; expires at %s)\n",
+		code, expires.UTC().Format("15:04:05 UTC"))
+	ok, err := term.Confirm(fmt.Sprintf("Sign %q with this pairing code?", csr.Subject.CommonName), false)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("aborted")
+	}
+
+	certPEM, _, err := authority.SignCSRWithPairing(csrPEM, time.Duration(*days)*24*time.Hour, ca.Pairing{
+		Commit:    commit,
+		ExpiresAt: expires,
+	})
+	if err != nil {
+		return err
+	}
+	return writeOrStdout(out, certPEM)
+}
+
+// writeOrStdout writes the cert PEM to *out (a file path) when non-empty,
+// else to os.Stdout. Always uses 0o644 for the file path.
+func writeOrStdout(out *string, certPEM []byte) error {
 	if *out != "" {
 		if err := os.WriteFile(*out, certPEM, 0o644); err != nil {
 			return err
@@ -243,8 +311,8 @@ func cmdSignCSR(args []string) error {
 		fmt.Fprintf(os.Stderr, "✓ wrote %s\n", *out)
 		return nil
 	}
-	os.Stdout.Write(certPEM)
-	return nil
+	_, err := os.Stdout.Write(certPEM)
+	return err
 }
 
 // --- bob serve ---
