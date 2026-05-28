@@ -1,7 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -483,23 +488,90 @@ func cmdEnroll(args []string) error {
 	return nil
 }
 
-// install-cert <client.crt> — install the signed client certificate.
+// install-cert <client.crt> — install the signed client certificate, after
+// verifying the OOB pairing code embedded in the cert (unless --no-pair).
 func cmdInstallCert(args []string) error {
 	fs := newFS("install-cert")
 	dir := dirFlag(fs)
+	noPair := fs.Bool("no-pair", false, "accept certs without a pairing extension (skip OOB code check)")
 	pos := parse(fs, args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice install-cert <client.crt>")
+		return fmt.Errorf("usage: alice install-cert <client.crt> [--no-pair]")
 	}
 	certPEM, err := os.ReadFile(pos[0])
 	if err != nil {
 		return err
 	}
+
+	blk, _ := pem.Decode(certPEM)
+	if blk == nil || blk.Type != "CERTIFICATE" {
+		return fmt.Errorf("not a PEM certificate: %s", pos[0])
+	}
+	cert, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse cert: %w", err)
+	}
+	fp := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	fmt.Fprintf(os.Stderr, "→ Cert identity:  %s\n", cert.Subject.CommonName)
+	fmt.Fprintf(os.Stderr, "→ Cert pubkey fp: %s\n", hex.EncodeToString(fp[:]))
+
+	if *noPair {
+		fmt.Fprintf(os.Stderr, "⚠ --no-pair: skipping OOB code check\n")
+	} else {
+		code, err := readPairingCode()
+		if err != nil {
+			return err
+		}
+		switch err := ca.VerifyPairing(cert, code, time.Now()); {
+		case err == nil:
+			fmt.Fprintf(os.Stderr, "✓ pairing verified\n")
+		case errors.Is(err, ca.ErrPairingAbsent):
+			return fmt.Errorf("cert was signed without pairing — re-run with --no-pair to accept, or ask Bob to re-sign with pairing")
+		case errors.Is(err, ca.ErrPairingExpired):
+			return fmt.Errorf("pairing code expired — ask Bob to re-sign the CSR (a fresh code resets the 10-minute window)")
+		case errors.Is(err, ca.ErrPairingMismatch):
+			return fmt.Errorf("pairing code did not match — re-run install-cert with the correct code")
+		default:
+			return fmt.Errorf("pairing verify: %w", err)
+		}
+	}
+
 	s := localvault.Open(*dir)
 	if err := s.WriteFile("client.crt", certPEM, 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("✓ Installed client cert at %s\n", s.ClientCertPath())
+	return nil
+}
+
+// readPairingCode reads the 8-digit code from $ANB_PAIR_CODE if set,
+// otherwise prompts on the TTY. Validates 8 ASCII digits in either case.
+func readPairingCode() (string, error) {
+	if v := os.Getenv("ANB_PAIR_CODE"); v != "" {
+		if err := validatePairingCode(v); err != nil {
+			return "", fmt.Errorf("ANB_PAIR_CODE: %w", err)
+		}
+		return v, nil
+	}
+	v, err := term.ReadLine("Enter the 8-digit pairing code: ")
+	if err != nil {
+		return "", err
+	}
+	if err := validatePairingCode(v); err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+func validatePairingCode(s string) error {
+	if len(s) != 8 {
+		return fmt.Errorf("pairing code must be 8 digits (got %d chars)", len(s))
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("pairing code must be digits only")
+		}
+	}
 	return nil
 }
 

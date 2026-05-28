@@ -64,6 +64,13 @@ request against it (like Kubernetes client-cert auth).
 - **Mutual TLS with a private CA** — no public CA, no ACME. Bob mints its own CA,
   server cert, and signs each client's CSR. Runs over any network (LAN, VPN,
   internet).
+- **OOB enrollment pairing** — `bob sign-csr` shows the CSR identity, the
+  public-key fingerprint, and a one-shot 8-digit pairing code; the Bob operator
+  reads the code to Alice over a side channel. `alice install-cert` re-prompts
+  for it and refuses the cert if it doesn't match. The code is bound to the
+  issued cert's public key (commitment in a non-critical X.509 extension) and
+  expires 10 minutes after sign-csr. `--no-pair` on both sides bypasses for
+  scripted use.
 - **Per-identity authorization** — map each identity to the key prefixes it may
   touch, plus an optional presence allowlist for gated keys. Every request is
   audited.
@@ -87,6 +94,12 @@ protect the endpoints:
   all plaintext that flows through it. Harden and audit it accordingly.
 - Presence gating here is a **Bob-side policy** (identity allowlist + audit), not
   device biometrics.
+- **Enrollment pairing is a human OOB check, not a hard gate.** The 8-digit code
+  defends against in-flight cert swaps and operator misclicks; it does *not*
+  stop an attacker with filesystem access on Alice (who can copy `client.crt`
+  past `install-cert` entirely) or on Bob (who can mint anything). 8 decimal
+  digits ≈ 26.6 bits — enough for one-shot OOB inside a 10-minute window, not
+  enough to lean on as a credential.
 
 ---
 
@@ -141,10 +154,17 @@ State lives in `~/.anb/bob/` (override with `--dir` or `$ANB_BOB_DIR`):
 
 Hand `ca.crt` to each Alice out of band (it's the public trust anchor).
 
-### 2. Enroll Alice
+### 2. Enroll Alice (with operator pairing)
+
+`bob sign-csr` and `alice install-cert` exchange a one-shot 8-digit pairing
+code out-of-band: Bob shows it to its operator at sign time, the operator
+reads it to Alice's operator over a separate channel (voice / Signal / QR),
+and Alice types it back at install time. The code is bound to the issued
+cert's public key, so an in-flight cert swap detunes it; it expires 10 minutes
+after sign-csr.
 
 ```sh
-# on Alice's machine: generate a keypair + CSR, install the CA, save the profile
+# 1) on Alice's machine — generate keypair + CSR, install the CA, save profile
 alice enroll \
   --identity alice-laptop \
   --bob bob.internal:8443 \
@@ -152,18 +172,46 @@ alice enroll \
   --ca ./ca.crt
 #   → writes client.key (0600), client.csr, ca.crt, config.json
 
-# send client.csr to the Bob operator, who reviews the identity and signs it:
+# 2) send client.csr to the Bob operator; Bob reviews + signs interactively
 bob sign-csr alice-laptop.csr --out alice-laptop.crt
+#   CSR identity:  alice-laptop
+#   CSR pubkey fp: 5f8a…c1   (sha256 of SubjectPublicKeyInfo)
+#   Pairing code:  47281930  (show to Alice OOB; expires in 10m at 14:23 UTC)
+#   Sign? [y/N]: y
+#   ✓ wrote alice-laptop.crt
 
-# back on Alice's machine, install the signed cert:
+# 3) Bob operator transmits 47281930 to Alice operator via a side channel
+
+# 4) on Alice's machine — install the signed cert and verify the code
 alice install-cert ./alice-laptop.crt
+#   Cert identity:  alice-laptop
+#   Cert pubkey fp: 5f8a…c1
+#   Enter the 8-digit pairing code: 47281930
+#   ✓ pairing verified — installed client cert
 
-# verify the whole chain end-to-end
+# 5) verify the whole chain end-to-end
 alice status
 #   Identity:   alice-laptop
 #   Bob:        bob.internal:8443 (server-name bob.internal)
 #   Bob status: unlocked
 ```
+
+**Wire format.** The cert carries one non-critical X.509 extension under a
+project OID in the `2.25.…` arc (concrete UUID-derived value chosen in
+source). Its value is ASN.1 `SEQUENCE { commit OCTET STRING (SIZE(32)),
+expiresAt GeneralizedTime }`, where `commit = SHA-256(code ‖ pubkey_fp)`,
+`code` is the 8 ASCII digits Bob displayed, and `pubkey_fp` is the SHA-256 of
+the cert's `SubjectPublicKeyInfo` DER. Cert distribution stays a single file
+and Bob's signature covers `expiresAt`, so the deadline can't be extended
+after issuance.
+
+**Automation escape hatch.** When Alice and Bob are both scripted (CI,
+bring-up of many clients) and no OOB channel exists, pass `--no-pair` to
+**both** `bob sign-csr` and `alice install-cert`. Bob will WARN on each
+unpaired sign-out and the trust model degrades to "anyone with shell on Bob
+can mint Alices". To keep Bob interactive but skip Alice's prompt (you already
+relayed the code into the environment), set `ANB_PAIR_CODE=47281930` before
+`alice install-cert`.
 
 ### 3. Daily use
 
@@ -221,7 +269,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 |---|---|
 | `bob ca init [--cn N] [--ttl-years N] [--force]` | Create the private CA |
 | `bob init [--host h1,h2] [--force]` | Generate + wrap the master key, mint the server cert |
-| `bob sign-csr <csr> [--out F] [--ttl-days N]` | Sign an Alice CSR → client cert |
+| `bob sign-csr <csr> [--out F] [--ttl-days N] [--no-pair]` | Sign an Alice CSR → client cert. Interactive by default: prints CSR identity + pubkey fingerprint + an 8-digit OOB pairing code (10-minute TTL), confirms y/N before signing. `--no-pair` skips pairing and warns. |
 | `bob serve [--addr :8443] [--ttl SECONDS] [-D] [--log FILE]` | Unlock + run the mTLS oracle (`-D` detaches into the background) |
 
 ### alice — safe (agent + human, no TTY)
@@ -252,7 +300,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | Command | Description |
 |---|---|
 | `alice enroll --identity N --bob HOST:PORT --ca ca.crt [--server-name SAN]` | Generate keypair + CSR, install CA, save profile |
-| `alice install-cert <client.crt>` | Install the signed client cert |
+| `alice install-cert <client.crt> [--no-pair]` | Verify the 10-minute OOB pairing code embedded in the cert, then install it. `--no-pair` accepts certs signed without pairing. Code may also come from `$ANB_PAIR_CODE` instead of the prompt. |
 
 Flags may appear before or after positional arguments.
 
@@ -296,6 +344,7 @@ All randomness comes from `crypto/rand`.
 | `ANB_BOB_DIR` | `~/.anb/bob` | Bob's state directory |
 | `ANB_ALICE_DIR` | `~/.anb/alice` | Alice's state directory |
 | `ANB_BOB_PASSWORD` | _(prompt)_ | Master password for `bob init`/`serve` (automation; otherwise prompted on a TTY) |
+| `ANB_PAIR_CODE` | _(prompt)_ | 8-digit pairing code for `alice install-cert` (automation; otherwise prompted on a TTY) |
 
 `--dir` overrides the state directory on any command.
 

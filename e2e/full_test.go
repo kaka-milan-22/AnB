@@ -6,7 +6,11 @@
 package e2e
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -185,4 +189,60 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestPairingEnrollEndToEnd(t *testing.T) {
+	// Stand up a fresh CA (mirrors what `bob ca init` writes to disk).
+	authority, err := ca.NewCA("e2e-ca", time.Hour)
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+
+	// Alice side: generate keypair + CSR.
+	csrPEM, _, err := ca.GenerateCSR("e2e-alice")
+	if err != nil {
+		t.Fatalf("GenerateCSR: %v", err)
+	}
+
+	// Bob side: derive the pubkey fingerprint from the CSR, mint a code,
+	// commit, and sign.
+	code, err := ca.NewPairingCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(csrPEM)
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := sha256.Sum256(csr.RawSubjectPublicKeyInfo)
+	commit := ca.PairingCommit(code, fp[:])
+	certPEM, ident, err := authority.SignCSRWithPairing(csrPEM, time.Hour, ca.Pairing{
+		Commit:    commit,
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("SignCSRWithPairing: %v", err)
+	}
+	if ident != "e2e-alice" {
+		t.Fatalf("identity: got %q want %q", ident, "e2e-alice")
+	}
+
+	// Alice side: parse cert, verify pairing with the right code, wrong code,
+	// and expired window.
+	certBlk, _ := pem.Decode(certPEM)
+	cert, err := x509.ParseCertificate(certBlk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ca.VerifyPairing(cert, code, time.Now()); err != nil {
+		t.Fatalf("happy path: %v", err)
+	}
+	if err := ca.VerifyPairing(cert, "00000000", time.Now()); !errors.Is(err, ca.ErrPairingMismatch) {
+		t.Fatalf("wrong code: got %v want ErrPairingMismatch", err)
+	}
+	future := time.Now().Add(11 * time.Minute)
+	if err := ca.VerifyPairing(cert, code, future); !errors.Is(err, ca.ErrPairingExpired) {
+		t.Fatalf("expired: got %v want ErrPairingExpired", err)
+	}
 }
