@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/ca"
-	"github.com/kaka-milan-22/AnB/internal/mtls"
+	"github.com/kaka-milan-22/AnB/v2/internal/ca"
+	"github.com/kaka-milan-22/AnB/v2/internal/mtls"
 )
 
 // startServer returns the listener addr and a channel delivering the verified

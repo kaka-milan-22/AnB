@@ -26,13 +26,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/authz"
-	"github.com/kaka-milan-22/AnB/internal/ca"
-	"github.com/kaka-milan-22/AnB/internal/crypto"
-	"github.com/kaka-milan-22/AnB/internal/keystore"
-	"github.com/kaka-milan-22/AnB/internal/mtls"
-	"github.com/kaka-milan-22/AnB/internal/server"
-	"github.com/kaka-milan-22/AnB/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/authz"
+	"github.com/kaka-milan-22/AnB/v2/internal/ca"
+	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v2/internal/keystore"
+	"github.com/kaka-milan-22/AnB/v2/internal/mtls"
+	"github.com/kaka-milan-22/AnB/v2/internal/server"
+	"github.com/kaka-milan-22/AnB/v2/internal/term"
 )
 
 const pairCodeTTL = 10 * time.Minute

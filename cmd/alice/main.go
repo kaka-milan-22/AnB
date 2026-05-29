@@ -16,9 +16,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kaka-milan-22/AnB/internal/client"
-	"github.com/kaka-milan-22/AnB/internal/localvault"
-	"github.com/kaka-milan-22/AnB/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/client"
+	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v2/internal/term"
 )
 
 var (

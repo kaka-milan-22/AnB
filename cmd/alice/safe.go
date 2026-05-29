@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kaka-milan-22/AnB/internal/localvault"
-	"github.com/kaka-milan-22/AnB/internal/redact"
+	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v2/internal/redact"
 )
 
 var unvaultedMarker = regexp.MustCompile(`<agent-vault:UNVAULTED:sha256:[a-f0-9]{8,16}>`)

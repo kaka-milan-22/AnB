@@ -1,4 +1,4 @@
-module github.com/kaka-milan-22/AnB
+module github.com/kaka-milan-22/AnB/v2
 
 go 1.26.3
 

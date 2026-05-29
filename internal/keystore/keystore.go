@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
 )
 
 // ErrLocked is returned by Encrypt/Decrypt when no key is currently held.
