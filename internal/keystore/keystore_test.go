@@ -138,6 +138,69 @@ func TestAddKeyBumpsCurrent(t *testing.T) {
 	}
 }
 
+// TestHoldDefensivelyCopiesKey pins the v2.6 hardening that prevents the
+// v2.0–v2.5 zero-K bug from coming back. Caller wipes its own copy
+// after Hold; the store's K must survive (i.e. Encrypt/Decrypt still
+// round-trip the right plaintext, NOT a zero-K ciphertext).
+func TestHoldDefensivelyCopiesKey(t *testing.T) {
+	mk, _ := crypto.NewMasterKey()
+	s := New(nil)
+	s.HoldMulti(map[int][]byte{1: mk}, 1, 0)
+	crypto.Wipe(mk) // emulate the buggy v2.5- daemon pattern
+
+	ct, err := s.Encrypt([]byte("hello"))
+	if err != nil {
+		t.Fatalf("encrypt after caller Wipe: %v", err)
+	}
+	pt, _, _, err := s.Decrypt(ct)
+	if err != nil || string(pt) != "hello" {
+		t.Fatalf("round-trip after caller Wipe: pt=%q err=%v", pt, err)
+	}
+
+	// The store's K must NOT be the all-zero key. If it were, a
+	// ciphertext sealed under zero externally would decrypt under
+	// the store's K — defense against the v2.5- bug recurring.
+	zero := make([]byte, 32)
+	external, _ := crypto.Seal(zero, []byte("attacker-controlled"))
+	if _, _, _, err := s.Decrypt(crypto.PackVersion(1, external)); err == nil {
+		t.Fatal("store accepted a zero-K ciphertext — the v2.0-v2.5 zero-K bug regressed")
+	}
+}
+
+// Hold (single-K convenience) also defensively copies.
+func TestHoldSingleDefensivelyCopiesKey(t *testing.T) {
+	mk, _ := crypto.NewMasterKey()
+	s := New(nil)
+	s.Hold(mk, 0)
+	crypto.Wipe(mk)
+	ct, err := s.Encrypt([]byte("hi"))
+	if err != nil {
+		t.Fatalf("encrypt after caller Wipe (Hold): %v", err)
+	}
+	pt, _, _, err := s.Decrypt(ct)
+	if err != nil || string(pt) != "hi" {
+		t.Fatalf("Hold round-trip after Wipe: pt=%q err=%v", pt, err)
+	}
+}
+
+// AddKey defensively copies too.
+func TestAddKeyDefensivelyCopiesKey(t *testing.T) {
+	k1, _ := crypto.NewMasterKey()
+	k2, _ := crypto.NewMasterKey()
+	s := New(nil)
+	s.HoldMulti(map[int][]byte{1: k1}, 1, 0)
+	s.AddKey(2, k2)
+	crypto.Wipe(k2)
+	ct, err := s.Encrypt([]byte("hello"))
+	if err != nil {
+		t.Fatalf("encrypt after AddKey + caller Wipe: %v", err)
+	}
+	pt, _, _, err := s.Decrypt(ct)
+	if err != nil || string(pt) != "hello" {
+		t.Fatalf("AddKey round-trip after Wipe: pt=%q err=%v", pt, err)
+	}
+}
+
 // Zeroize wipes every version + locks the store.
 func TestZeroizeWipesAll(t *testing.T) {
 	k1, _ := crypto.NewMasterKey()

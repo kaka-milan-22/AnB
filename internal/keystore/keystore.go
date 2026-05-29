@@ -56,6 +56,14 @@ func (s *Store) Hold(key []byte, ttl time.Duration) {
 // HoldMulti takes ownership of all keys, mlocks each, and (re)arms
 // the idle timer. ttl <= 0 means "no expiry". HoldMulti replaces any
 // previously held keys.
+//
+// IMPORTANT — HARDENING NOTE (v2.6+): the store makes a defensive
+// COPY of every caller-supplied key before mlock'ing. This breaks the
+// old aliasing footgun (v2.0–v2.5 had `store.Hold(mk); crypto.Wipe(mk)`
+// which zeroed the store's view because both ends shared the same
+// underlying byte array; the daemon then encrypted/decrypted under an
+// all-zero AES-256 key with no warning). After HoldMulti returns the
+// caller is free to Wipe its own buffers — the store's K is unaffected.
 func (s *Store) HoldMulti(keys map[int][]byte, current int, ttl time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,25 +76,32 @@ func (s *Store) HoldMulti(keys map[int][]byte, current int, ttl time.Duration) {
 		// in a half-initialized state.
 		return
 	}
-	for _, k := range keys {
-		lockMemory(k)
+	owned := make(map[int][]byte, len(keys))
+	for id, k := range keys {
+		c := make([]byte, len(k))
+		copy(c, k)
+		lockMemory(c)
+		owned[id] = c
 	}
-	s.keys = keys
+	s.keys = owned
 	s.current = current
 	s.ttl = ttl
 	s.armLocked(false)
 }
 
 // AddKey installs an additional K under the given version and bumps
-// current to it. Used by bob rotate-master-{password,key}.
+// current to it. Used by bob rotate-master-{password,key}. Like
+// HoldMulti it defensively COPIES the key — caller is free to Wipe.
 func (s *Store) AddKey(id int, key []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.keys == nil {
 		s.keys = make(map[int][]byte)
 	}
-	lockMemory(key)
-	s.keys[id] = key
+	c := make([]byte, len(key))
+	copy(c, key)
+	lockMemory(c)
+	s.keys[id] = c
 	s.current = id
 	s.armLocked(false)
 }
