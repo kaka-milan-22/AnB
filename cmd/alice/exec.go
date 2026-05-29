@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/kaka-milan-22/AnB/internal/localvault"
 	"github.com/kaka-milan-22/AnB/internal/redact"
+	"github.com/kaka-milan-22/AnB/internal/term"
 )
 
 // envEntry is one parsed --env flag: a POSIX env name and its (possibly
@@ -93,6 +96,14 @@ type allowlist struct {
 // not exist. cmdExec catches this to print the dedicated init hint
 // instead of a generic file-not-found error.
 var errAllowlistMissing = errors.New("exec-allowlist.json not found")
+
+// errExecDenied signals "operator declined the TTY confirm-and-append
+// prompt; the deny output was already printed before the prompt, so
+// do not print anything else". The dispatcher in main.go recognizes
+// this sentinel and exits non-zero silently. Without it, the
+// dispatcher would re-print the deny message a second time after the
+// operator had already read it once.
+var errExecDenied = errors.New("alice exec: declined")
 
 // loadAllowlist reads and validates exec-allowlist.json from the given
 // state dir. Returns errAllowlistMissing if the file does not exist.
@@ -291,7 +302,7 @@ func cmdExec(args []string) error {
 	}
 
 	if matchAllowlist(cmdName, childArgs, envNames, list) == nil {
-		return fmt.Errorf("alice exec: invocation not in allowlist.\n\n"+
+		denyMsg := fmt.Sprintf("alice exec: invocation not in allowlist.\n\n"+
 			"  cmd:  %s\n"+
 			"  args: %s\n"+
 			"  env:  %s\n\n"+
@@ -307,6 +318,33 @@ func cmdExec(args []string) error {
 			mustMarshalJSON(sortedStringSlice(envNames)),
 			s.Dir,
 			formatDenyJSON(cmdName, childArgs, envNames))
+
+		// TTY-only convenience: offer to append the entry now. Non-TTY
+		// callers (agents, pipes) get the hard-deny exactly as before.
+		// Require BOTH stdin AND stderr to be TTYs — otherwise the prompt
+		// is invisible (stderr redirected) or unanswerable (stdin piped),
+		// and the operator would be typing into a black hole.
+		if term.StdinIsTTY() && term.IsTTY(os.Stderr) {
+			fmt.Fprintln(os.Stderr, denyMsg)
+			if confirmAppend(os.Stdin, os.Stderr) {
+				entry := allowEntry{
+					Cmd:  cmdName,
+					Args: childArgs,
+					Env:  sortedStringSlice(envNames),
+				}
+				if err := appendAllowEntry(s.Dir, entry); err != nil {
+					return fmt.Errorf("append allowlist entry: %w", err)
+				}
+				return fmt.Errorf("✓ appended entry to %s/exec-allowlist.json — re-run your command to execute it",
+					s.Dir)
+			}
+			// Operator declined — denyMsg already on stderr (above), so
+			// return the silent sentinel: dispatcher exits non-zero
+			// without printing a second copy of the deny output.
+			return errExecDenied
+		}
+
+		return errors.New(denyMsg)
 	}
 
 	// Past the gate — proceed with vault lookup, decrypt, restore, exec.
@@ -363,4 +401,54 @@ func cmdExec(args []string) error {
 	fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
 
 	return syscall.Exec(cmdPath, childArgv, merged)
+}
+
+// appendAllowEntry reads exec-allowlist.json from dir, parses it,
+// appends entry to Allow, and writes back atomically (via the existing
+// localvault writeAtomic helper). Returns errAllowlistMissing if the
+// file does not exist — callers should not attempt to "create + append"
+// because the missing file is itself an operator-deliberate state
+// (default-deny scaffold; see cmdEnroll).
+//
+// NOTE: no file lock. Two simultaneous alice exec invocations that
+// both reach the TTY-confirm path could race on the read-modify-write
+// — one append would overwrite the other's snapshot, dropping that
+// entry. AnB is single-operator by design (one human at the keyboard);
+// the race window is the human typing "yes" in two terminals at the
+// same moment. If that becomes a real scenario, swap to flock(2).
+func appendAllowEntry(dir string, entry allowEntry) error {
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		return err
+	}
+	list.Allow = append(list.Allow, entry)
+
+	// Re-marshal with stable indentation matching the scaffold style so
+	// the file remains human-editable after auto-appends.
+	body, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal allowlist: %w", err)
+	}
+	body = append(body, '\n')
+
+	s := localvault.Open(dir)
+	return s.WriteFile("exec-allowlist.json", body, 0o600)
+}
+
+// confirmAppend prints a "type 'yes' to confirm" prompt to out and reads
+// one line from in. Returns true iff the trimmed-lowercase input is
+// exactly "yes" — a single "y" does NOT count, deliberately, because the
+// caller's next action (appending to the allowlist + signalling
+// "operator approved") deserves two friction characters more than the
+// reflex-key "y".
+//
+// Caller must ensure no further reads from in occur after this call:
+// the internal bufio.Reader may have consumed bytes beyond the first
+// newline (read-ahead). In cmdExec the caller exits the process via
+// the dispatcher immediately after either branch (append or deny),
+// so no subsequent stdin read happens.
+func confirmAppend(in io.Reader, out io.Writer) bool {
+	fmt.Fprint(out, "\nAppend this entry to exec-allowlist.json? Type 'yes' to confirm [y/N]: ")
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	return strings.ToLower(strings.TrimSpace(line)) == "yes"
 }

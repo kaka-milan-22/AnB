@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -406,5 +407,153 @@ func TestMatchAllowlistEmptyArgsAndEnv(t *testing.T) {
 	}}
 	if matchAllowlist("/usr/bin/true", []string{}, []string{}, list) == nil {
 		t.Fatal("empty args+env should match an empty-args+empty-env entry")
+	}
+}
+
+func TestConfirmAppendAcceptsYes(t *testing.T) {
+	for _, input := range []string{"yes\n", "YES\n", "Yes\n", "  yes  \n", "yes"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if !got {
+			t.Fatalf("input %q: want true, got false (prompt was: %q)", input, out.String())
+		}
+	}
+}
+
+func TestConfirmAppendRejectsY(t *testing.T) {
+	// Single 'y' is intentionally NOT accepted — operator must type full word.
+	for _, input := range []string{"y\n", "Y\n", " y\n"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if got {
+			t.Fatalf("input %q: want false (only 'yes' is accepted), got true", input)
+		}
+	}
+}
+
+func TestConfirmAppendDefaultsToNo(t *testing.T) {
+	// Empty input (just Enter), no input, and any other non-"yes" string
+	// all return false. Note: "yes\nmore\n" is NOT included here because
+	// bufio.ReadString('\n') reads only the first line ("yes\n"), so the
+	// result is true — consistent with the spec implementation.
+	for _, input := range []string{"\n", "", "no\n", "yes please\n"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if got {
+			t.Fatalf("input %q: want false (default N), got true", input)
+		}
+	}
+}
+
+func TestConfirmAppendPrintsPrompt(t *testing.T) {
+	var out bytes.Buffer
+	_ = confirmAppend(strings.NewReader("no\n"), &out)
+	prompt := out.String()
+	if !strings.Contains(prompt, "yes") {
+		t.Fatalf("prompt should mention 'yes' as the confirmation word; got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "[y/N]") && !strings.Contains(prompt, "yes/N") {
+		t.Fatalf("prompt should display the default-N hint; got: %q", prompt)
+	}
+}
+
+func TestAppendAllowEntryAppendsToEmptyList(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := allowEntry{Cmd: "/usr/bin/echo", Args: []string{"hi"}, Env: []string{}}
+	if err := appendAllowEntry(dir, entry); err != nil {
+		t.Fatalf("appendAllowEntry: %v", err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Allow) != 1 {
+		t.Fatalf("want 1 entry after append, got %d", len(list.Allow))
+	}
+	if list.Allow[0].Cmd != "/usr/bin/echo" || !reflect.DeepEqual(list.Allow[0].Args, []string{"hi"}) {
+		t.Fatalf("appended entry mismatch: %+v", list.Allow[0])
+	}
+}
+
+func TestAppendAllowEntryPreservesExisting(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"/usr/bin/echo","args":["a"],"env":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := allowEntry{Cmd: "/opt/homebrew/bin/gh", Args: []string{"api", "user"}, Env: []string{"GH_TOKEN"}}
+	if err := appendAllowEntry(dir, entry); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Allow) != 2 {
+		t.Fatalf("want 2 entries (1 existing + 1 appended), got %d", len(list.Allow))
+	}
+	if list.Allow[0].Cmd != "/usr/bin/echo" {
+		t.Fatalf("existing entry was clobbered: %+v", list.Allow[0])
+	}
+	if list.Allow[1].Cmd != "/opt/homebrew/bin/gh" {
+		t.Fatalf("new entry missing or wrong position: %+v", list.Allow[1])
+	}
+}
+
+func TestAppendAllowEntryWritesValidJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := allowEntry{
+		Cmd:  "/bin/sh",
+		Args: []string{"-c", `echo "got: $TEST"`},
+		Env:  []string{"TEST"},
+	}
+	if err := appendAllowEntry(dir, entry); err != nil {
+		t.Fatal(err)
+	}
+	// Re-load via loadAllowlist (strict JSON with DisallowUnknownFields) to
+	// confirm the on-disk file is well-formed.
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("written file does not round-trip through loadAllowlist: %v", err)
+	}
+	if !reflect.DeepEqual(list.Allow[0], entry) {
+		t.Fatalf("round-trip mismatch: got %+v want %+v", list.Allow[0], entry)
+	}
+}
+
+func TestAppendAllowEntryFailsIfFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	// Do NOT create exec-allowlist.json.
+	entry := allowEntry{Cmd: "/usr/bin/echo", Args: []string{}, Env: []string{}}
+	err := appendAllowEntry(dir, entry)
+	if err == nil {
+		t.Fatal("expected error when allowlist file is missing")
+	}
+	if !errors.Is(err, errAllowlistMissing) {
+		t.Fatalf("want errAllowlistMissing, got %v", err)
+	}
+}
+
+func TestAppendAllowEntryWritesAtomicMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := allowEntry{Cmd: "/usr/bin/echo", Args: []string{}, Env: []string{}}
+	if err := appendAllowEntry(dir, entry); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(filepath.Join(dir, "exec-allowlist.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode after append = %o, want 0o600", st.Mode().Perm())
 	}
 }

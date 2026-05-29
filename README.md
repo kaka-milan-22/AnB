@@ -113,7 +113,15 @@ protect the endpoints:
   memory-only channel. The allowlist limits *which* (cmd, args, env)
   triples can run, not what those processes do once running — the
   trust boundary is "alice + the operator-blessed binaries + same-uid
-  process access".
+  process access". The TTY confirm-and-append flow added in v2.1
+  gates on `isatty(stdin) && isatty(stderr)` — agents and pipes (the
+  common case) never reach the prompt, so the allowlist cannot be
+  widened from typical agent harnesses. An agent that explicitly
+  allocates a pty (e.g. `expect`, `pty.spawn`, an agent driving
+  tmux/screen) WOULD pass the gate and could send `yes\n`; if your
+  agent runtime owns a pty, treat the prompt as "anyone with this
+  TTY can widen the allowlist" and gate the binary itself, not just
+  AnB.
 
 ---
 
@@ -123,16 +131,16 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-go install github.com/kaka-milan-22/AnB/cmd/bob@v2.0.0
-go install github.com/kaka-milan-22/AnB/cmd/alice@v2.0.0
+go install github.com/kaka-milan-22/AnB/cmd/bob@v2.1.0
+go install github.com/kaka-milan-22/AnB/cmd/alice@v2.1.0
 
-# …or build from a local clone of the v2.0.0 tag
-git clone --branch v2.0.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v2.1.0 tag
+git clone --branch v2.1.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v2.0.0` with `@latest` to track unreleased changes on `main`.
+Replace `v2.1.0` with `@latest` to track unreleased changes on `main`.
 
 ---
 
@@ -249,9 +257,11 @@ alice get stripe-key --reveal    # shows the value (TTY required)
 
 # v2.0.0+: alice exec is default-deny via ~/.anb/alice/exec-allowlist.json.
 # `alice enroll` scaffolds an empty {"allow":[]} for you. To allow a new
-# invocation: run it once, copy the suggested JSON from the deny error
-# into allow[], re-run. Then subsequent identical calls go through
-# without further prompting.
+# invocation: run it once. The deny error shows you the exact JSON
+# triple to add. On a TTY (interactive operator), alice also prompts
+# `Type 'yes' to confirm` — answering yes atomically appends the entry
+# and exits with "re-run to execute"; you re-run the command manually.
+# Non-TTY callers (agents, pipes) never see the prompt — hard-deny only.
 #
 # NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
 alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
