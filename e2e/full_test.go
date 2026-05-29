@@ -241,6 +241,8 @@ type execHarness struct {
 	alicePath string
 	cl        *client.Client
 	vault     *localvault.Store
+	caPEM     []byte
+	bobAddr   string
 }
 
 // newExecHarness spins up Bob, mints an Alice identity, writes all disk state
@@ -304,6 +306,8 @@ func newExecHarness(t *testing.T) *execHarness {
 		alicePath: alicePath,
 		cl:        cl,
 		vault:     lv,
+		caPEM:     b.authority.CertPEM,
+		bobAddr:   b.addr,
 	}
 }
 
@@ -400,5 +404,51 @@ func TestAliceExecFailClosedOnMissingKey(t *testing.T) {
 	if !strings.Contains(stderr.String(), "vault has no key") {
 		t.Logf("stderr was: %s", stderr.String())
 		// Don't Fatal — exit code + missing outfile are the real assertions.
+	}
+}
+
+func TestAliceEnrollScaffoldsAllowlist(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	// newExecHarness sets up Alice's state dir by writing files directly
+	// (no cmdEnroll call). We need a FRESH state dir to test the scaffold
+	// side-effect of alice enroll.
+	freshDir := filepath.Join(h.tmpDir, "fresh-enroll")
+	if err := os.MkdirAll(freshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(h.tmpDir, "enroll-ca.crt")
+	if err := os.WriteFile(caPath, h.caPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(h.alicePath,
+		"enroll",
+		"--dir", freshDir,
+		"--identity", "scaffold-test",
+		"--bob", h.bobAddr,
+		"--server-name", "localhost",
+		"--ca", caPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("alice enroll: %v\noutput: %s", err, out)
+	}
+
+	allow := filepath.Join(freshDir, "exec-allowlist.json")
+	st, err := os.Stat(allow)
+	if err != nil {
+		t.Fatalf("exec-allowlist.json should exist after enroll: %v", err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("exec-allowlist.json mode = %o, want 0o600", st.Mode().Perm())
+	}
+	b, err := os.ReadFile(allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != `{"allow":[]}` {
+		t.Fatalf("scaffold content = %q, want {\"allow\":[]}", string(b))
 	}
 }
