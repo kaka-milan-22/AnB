@@ -373,6 +373,12 @@ func cmdExec(args []string) error {
 // caller's next action (appending to the allowlist + signalling
 // "operator approved") deserves two friction characters more than the
 // reflex-key "y".
+//
+// Caller must ensure no further reads from in occur after this call:
+// the internal bufio.Reader may have consumed bytes beyond the first
+// newline (read-ahead). In cmdExec the caller exits the process via
+// the dispatcher immediately after either branch (append or deny),
+// so no subsequent stdin read happens.
 func confirmAppend(in io.Reader, out io.Writer) bool {
 	fmt.Fprint(out, "\nAppend this entry to exec-allowlist.json? Type 'yes' to confirm [y/N]: ")
 	line, _ := bufio.NewReader(in).ReadString('\n')
