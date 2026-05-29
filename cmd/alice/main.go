@@ -19,6 +19,7 @@ import (
 	"github.com/kaka-milan-22/AnB/v2/internal/client"
 	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v2/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/version"
 )
 
 var (
@@ -29,6 +30,11 @@ var (
 func main() {
 	if len(os.Args) < 2 {
 		usage()
+	}
+	switch os.Args[1] {
+	case "version", "--version", "-V":
+		version.Print(os.Stdout, "alice")
+		return
 	}
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
@@ -73,6 +79,7 @@ func usage() {
 
 	fmt.Fprint(w, "Options:\n")
 	fmt.Fprintf(w, row, "-h, --help", "display help for command")
+	fmt.Fprintf(w, row, "-V, --version", "print version and exit")
 
 	fmt.Fprint(w, "\nCommands:\n")
 	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
