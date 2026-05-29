@@ -274,3 +274,35 @@ func TestLoadAllowlistRejectsBadEnvName(t *testing.T) {
 		t.Fatal("expected error for bad env name")
 	}
 }
+
+func TestLoadAllowlistRejectsMissingCmd(t *testing.T) {
+	dir := t.TempDir()
+	// cmd field omitted entirely; Go zero-values it to "".
+	body := `{"allow":[{"args":["x"],"env":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for missing cmd field")
+	}
+	if !strings.Contains(err.Error(), "missing or empty") {
+		t.Fatalf("error should call out missing/empty cmd; got: %v", err)
+	}
+}
+
+func TestLoadAllowlistAcceptsEmptyAllow(t *testing.T) {
+	// {"allow":[]} is the scaffolded default; must parse cleanly so cmdExec
+	// can hand it to matchAllowlist (which returns nil for any invocation).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist on empty allow: %v", err)
+	}
+	if len(list.Allow) != 0 {
+		t.Fatalf("expected empty Allow, got %v", list.Allow)
+	}
+}

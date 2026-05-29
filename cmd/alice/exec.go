@@ -117,6 +117,9 @@ func loadAllowlist(dir string) (*allowlist, error) {
 	}
 
 	for i, e := range list.Allow {
+		if e.Cmd == "" {
+			return nil, fmt.Errorf("exec-allowlist.json: entry %d cmd is missing or empty (field \"cmd\" required)", i)
+		}
 		if !filepath.IsAbs(e.Cmd) {
 			return nil, fmt.Errorf("exec-allowlist.json: entry %d cmd %q must be an absolute path", i, e.Cmd)
 		}
