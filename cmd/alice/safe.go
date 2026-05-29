@@ -58,6 +58,7 @@ func cmdWrite(args []string) error {
 	fs := newFS("write")
 	dir := dirFlag(fs)
 	contentFlag := fs.String("content", "", "file content with <agent-vault:key> placeholders")
+	quiet := fs.Bool("quiet", false, "suppress status lines on stderr; restored content still goes to stdout/target")
 	pos := parse(fs, args)
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: alice write <file> [--content C]")
@@ -131,9 +132,11 @@ func cmdWrite(args []string) error {
 		return err
 	}
 	count := len(res.Restored) + unvaultedCount
-	fmt.Printf("✓ Written %s (%d secret%s restored)\n", filePath, count, plural(count))
-	if unvaultedCount > 0 {
-		fmt.Fprintf(os.Stderr, "⚠ %d unvaulted secret(s) restored from existing file — consider: alice import\n", unvaultedCount)
+	if !*quiet {
+		fmt.Fprintf(os.Stderr, "✓ Written %s (%d secret%s restored)\n", filePath, count, plural(count))
+		if unvaultedCount > 0 {
+			fmt.Fprintf(os.Stderr, "⚠ %d unvaulted secret(s) restored from existing file — consider: alice import\n", unvaultedCount)
+		}
 	}
 	return nil
 }
