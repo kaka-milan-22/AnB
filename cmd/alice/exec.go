@@ -208,9 +208,12 @@ type envFlagValue struct{ vals []string }
 func (e *envFlagValue) String() string     { return strings.Join(e.vals, ",") }
 func (e *envFlagValue) Set(v string) error { e.vals = append(e.vals, v); return nil }
 
-// cmdExec — agent-safe execution path. Resolves <agent-vault:k> placeholders
-// inside --env values via Bob (mTLS DecryptMany), builds the child's env with
-// explicit dedup, then syscall.Exec's the child. alice's process image is
+// cmdExec — agent-safe execution path. Requires a strict (cmd, args,
+// env-key-set) match against ~/.anb/alice/exec-allowlist.json (v2.0+).
+// Denied invocations fail before any vault I/O or mTLS connection.
+// Matched invocations resolve <agent-vault:k> placeholders inside --env
+// values via Bob (mTLS DecryptMany), build the child's env with
+// explicit dedup, then syscall.Exec the child. alice's process image is
 // replaced; alice's heap (with the plaintexts) is discarded by the kernel;
 // alice's stdout/stderr/stdin fds are inherited by the child.
 //
