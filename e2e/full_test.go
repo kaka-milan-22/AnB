@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -329,6 +330,17 @@ func (h *execHarness) seedSecret(t *testing.T, key, plaintext string) {
 // cleanup is a no-op (t.TempDir already registers cleanup with t.Cleanup).
 func (h *execHarness) cleanup() {}
 
+// seedAllowlist writes exec-allowlist.json under h.aliceDir with the given
+// entries (each a JSON-formatted entry body — caller is responsible for
+// shape). Overwrites any existing file (including the scaffold).
+func (h *execHarness) seedAllowlist(t *testing.T, entries ...string) {
+	t.Helper()
+	body := `{"allow":[` + strings.Join(entries, ",") + `]}`
+	if err := os.WriteFile(filepath.Join(h.aliceDir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // buildAlice compiles cmd/alice into dstDir and returns the binary path.
 func buildAlice(t *testing.T, dstDir string) string {
 	t.Helper()
@@ -357,6 +369,11 @@ func TestAliceExecHappyPath(t *testing.T) {
 	h.seedSecret(t, "smoke-key", "the-secret-value")
 
 	outFile := filepath.Join(h.tmpDir, "exec-out.txt")
+	h.seedAllowlist(t, fmt.Sprintf(`{
+		"cmd":  "/bin/sh",
+		"args": ["-c", "printf '%%s' \"$FOO\" > \"$1\"", "_", %q],
+		"env":  ["FOO"]
+	}`, outFile))
 	cmd := exec.Command(h.alicePath,
 		"exec",
 		"--env", "FOO=<agent-vault:smoke-key>",
@@ -382,7 +399,14 @@ func TestAliceExecFailClosedOnMissingKey(t *testing.T) {
 	defer h.cleanup()
 
 	// Do NOT seed the key — alice exec must fail before running the child.
+	// Seed an allowlist that matches this invocation so the gate passes and
+	// the test genuinely exercises the vault-missing-key path.
 	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
+	h.seedAllowlist(t, fmt.Sprintf(`{
+		"cmd":  "/bin/sh",
+		"args": ["-c", "printf '%%s' \"$FOO\" > \"$1\"", "_", %q],
+		"env":  ["FOO"]
+	}`, outFile))
 	cmd := exec.Command(h.alicePath,
 		"exec",
 		"--env", "FOO=<agent-vault:nonexistent-key>",
@@ -450,5 +474,78 @@ func TestAliceEnrollScaffoldsAllowlist(t *testing.T) {
 	}
 	if strings.TrimSpace(string(b)) != `{"allow":[]}` {
 		t.Fatalf("scaffold content = %q, want {\"allow\":[]}", string(b))
+	}
+}
+
+func TestAliceExecDeniedWhenAllowlistMissing(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	// IMPORTANT: do NOT seed an allowlist. The harness does not call
+	// cmdEnroll's scaffold path, so the file doesn't exist by default —
+	// but be defensive and remove it in case the harness changes.
+	_ = os.Remove(filepath.Join(h.aliceDir, "exec-allowlist.json"))
+
+	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
+	cmd := exec.Command(h.alicePath,
+		"exec",
+		"--env", "FOO=<agent-vault:any>",
+		"--",
+		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
+	)
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected alice exec to fail without an allowlist file")
+	}
+	if !strings.Contains(stderr.String(), "exec-allowlist.json not found") {
+		t.Logf("stderr was: %s", stderr.String())
+		t.Fatal("expected 'exec-allowlist.json not found' in stderr")
+	}
+	if _, err := os.Stat(outFile); !os.IsNotExist(err) {
+		t.Fatal("child should NOT have run; outFile exists")
+	}
+}
+
+func TestAliceExecDeniedWhenNoMatch(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	// Seed an allowlist with an entry that does NOT match what we'll
+	// invoke (different cmd, args, and env).
+	h.seedAllowlist(t, `{
+		"cmd":  "/usr/bin/true",
+		"args": [],
+		"env":  []
+	}`)
+
+	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
+	cmd := exec.Command(h.alicePath,
+		"exec",
+		"--env", "FOO=<agent-vault:any>",
+		"--",
+		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
+	)
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected alice exec to fail with no-match")
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "invocation not in allowlist") {
+		t.Logf("stderr was: %s", out)
+		t.Fatal("expected 'invocation not in allowlist' in stderr")
+	}
+	// Confirm the copy-paste JSON snippet is included.
+	if !strings.Contains(out, `"cmd":  "/bin/sh"`) {
+		t.Logf("stderr was: %s", out)
+		t.Fatal("expected suggested JSON entry with /bin/sh to be in stderr")
+	}
+	if _, err := os.Stat(outFile); !os.IsNotExist(err) {
+		t.Fatal("child should NOT have run; outFile exists")
 	}
 }
