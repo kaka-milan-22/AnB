@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -130,6 +131,44 @@ func loadAllowlist(dir string) (*allowlist, error) {
 		}
 	}
 	return &list, nil
+}
+
+// matchAllowlist returns the first entry in list.Allow whose cmd, args,
+// and env-key set exactly match the invocation, or nil if no entry
+// matches. Strict byte-for-byte equality on cmd and on each args
+// position; envKeys treated as a set (order-independent), exact
+// membership equality.
+func matchAllowlist(cmd string, args, envKeys []string, list *allowlist) *allowEntry {
+	for i, e := range list.Allow {
+		if e.Cmd != cmd {
+			continue
+		}
+		if len(e.Args) != len(args) {
+			continue
+		}
+		argsOK := true
+		for j := range args {
+			if args[j] != e.Args[j] {
+				argsOK = false
+				break
+			}
+		}
+		if !argsOK {
+			continue
+		}
+		if len(e.Env) != len(envKeys) {
+			continue
+		}
+		a := slices.Clone(envKeys)
+		b := slices.Clone(e.Env)
+		slices.Sort(a)
+		slices.Sort(b)
+		if !slices.Equal(a, b) {
+			continue
+		}
+		return &list.Allow[i]
+	}
+	return nil
 }
 
 // envFlagValue is a flag.Value that accumulates repeated --env occurrences.

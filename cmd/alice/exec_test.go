@@ -306,3 +306,105 @@ func TestLoadAllowlistAcceptsEmptyAllow(t *testing.T) {
 		t.Fatalf("expected empty Allow, got %v", list.Allow)
 	}
 }
+
+func TestMatchAllowlistExactEquality(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"hello"}, Env: []string{}},
+		{Cmd: "/opt/homebrew/bin/gh", Args: []string{"api", "user"}, Env: []string{"GH_TOKEN"}},
+	}}
+	hit := matchAllowlist("/opt/homebrew/bin/gh", []string{"api", "user"}, []string{"GH_TOKEN"}, list)
+	if hit == nil {
+		t.Fatal("expected match for gh api user")
+	}
+	if hit.Cmd != "/opt/homebrew/bin/gh" {
+		t.Fatalf("matched wrong entry: %+v", hit)
+	}
+}
+
+func TestMatchAllowlistRejectsExtraSpaceInArg(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"hello"}, Env: []string{}},
+	}}
+	hit := matchAllowlist("/usr/bin/echo", []string{"hello "}, []string{}, list)
+	if hit != nil {
+		t.Fatalf("trailing space in arg should not match: %+v", hit)
+	}
+}
+
+func TestMatchAllowlistRejectsDifferentArgOrder(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/git", Args: []string{"push", "origin", "main"}, Env: []string{}},
+	}}
+	hit := matchAllowlist("/usr/bin/git", []string{"push", "main", "origin"}, []string{}, list)
+	if hit != nil {
+		t.Fatal("swapped arg positions should not match")
+	}
+}
+
+func TestMatchAllowlistRejectsLengthMismatch(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"a", "b"}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/echo", []string{"a"}, []string{}, list) != nil {
+		t.Fatal("shorter args should not match")
+	}
+	if matchAllowlist("/usr/bin/echo", []string{"a", "b", "c"}, []string{}, list) != nil {
+		t.Fatal("longer args should not match")
+	}
+}
+
+func TestMatchAllowlistEnvKeysAreSetEqual(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{}, Env: []string{"A", "B"}},
+	}}
+	// invocation has same names in different order → matches
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"B", "A"}, list) == nil {
+		t.Fatal("env order should not matter")
+	}
+	// extra env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A", "B", "C"}, list) != nil {
+		t.Fatal("extra env key should not match")
+	}
+	// missing env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A"}, list) != nil {
+		t.Fatal("missing env key should not match")
+	}
+	// renamed env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A", "C"}, list) != nil {
+		t.Fatal("renamed env key should not match")
+	}
+}
+
+func TestMatchAllowlistNoWildcards(t *testing.T) {
+	// A literal "*" in an entry should match ONLY a literal "*" in the
+	// invocation — not act as a wildcard.
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"*"}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/echo", []string{"anything"}, []string{}, list) != nil {
+		t.Fatal("literal '*' must not act as wildcard")
+	}
+	if matchAllowlist("/usr/bin/echo", []string{"*"}, []string{}, list) == nil {
+		t.Fatal("literal '*' should match literal '*'")
+	}
+}
+
+func TestMatchAllowlistFirstMatchInFileOrderWins(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"x"}, Env: []string{}},
+		{Cmd: "/usr/bin/echo", Args: []string{"x"}, Env: []string{}}, // duplicate
+	}}
+	hit := matchAllowlist("/usr/bin/echo", []string{"x"}, []string{}, list)
+	if hit != &list.Allow[0] {
+		t.Fatal("first match should win")
+	}
+}
+
+func TestMatchAllowlistEmptyArgsAndEnv(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/true", Args: []string{}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/true", []string{}, []string{}, list) == nil {
+		t.Fatal("empty args+env should match an empty-args+empty-env entry")
+	}
+}
