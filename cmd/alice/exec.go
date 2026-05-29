@@ -171,6 +171,37 @@ func matchAllowlist(cmd string, args, envKeys []string, list *allowlist) *allowE
 	return nil
 }
 
+// formatDenyJSON produces a 2-space-indented JSON entry the operator
+// can paste verbatim into allow[] in exec-allowlist.json. envKeys is
+// sorted so identical invocations produce identical suggestions
+// (operator can grep their allowlist for the entry without map-order
+// flakiness).
+func formatDenyJSON(cmd string, args, envKeys []string) string {
+	argsJSON, _ := json.Marshal(args)
+	envSorted := slices.Clone(envKeys)
+	slices.Sort(envSorted)
+	envJSON, _ := json.Marshal(envSorted)
+	return fmt.Sprintf("  {\n    \"cmd\":  %q,\n    \"args\": %s,\n    \"env\":  %s\n  }",
+		cmd, argsJSON, envJSON)
+}
+
+// mustMarshalJSON returns the JSON encoding of v; intended for inputs
+// that cannot fail (string slices). Used inside the deny error to embed
+// the "cmd:" "args:" "env:" recap that mirrors what would go into the
+// allowlist file.
+func mustMarshalJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// sortedStringSlice returns a fresh sorted copy of a slice. Used by the
+// deny error to print env names in a stable order.
+func sortedStringSlice(s []string) []string {
+	out := slices.Clone(s)
+	slices.Sort(out)
+	return out
+}
+
 // envFlagValue is a flag.Value that accumulates repeated --env occurrences.
 type envFlagValue struct{ vals []string }
 
@@ -217,16 +248,67 @@ func cmdExec(args []string) error {
 		return fmt.Errorf("unexpected positional args before --: %v (place args after --)", fs.Args())
 	}
 
-	// Parse and validate --env entries; collect distinct vault keys referenced.
+	// Parse --env flags. Empty VALUE is rejected here (see EA1).
 	parsed, keySet, err := parseEnvFlag(envs.vals)
 	if err != nil {
 		return err
 	}
 
-	// Resolve all referenced vault keys via one DecryptMany round-trip.
+	// Allowlist gate (v2.0+). cmd + args after "--" plus the SET of --env
+	// KEY names are matched against ~/.anb/alice/exec-allowlist.json.
+	// Default-deny: missing file → init hint; no match → copy-paste-ready
+	// JSON in the error. Runs BEFORE vault lookup / Bob round-trip — a
+	// denied invocation never opens an mTLS connection.
+	cmdName := childArgv[0]
+	childArgs := childArgv[1:]
+	envNames := make([]string, 0, len(parsed))
+	for _, p := range parsed {
+		envNames = append(envNames, p.Name)
+	}
+
+	if !filepath.IsAbs(cmdName) {
+		return fmt.Errorf("alice exec: cmd %q must be an absolute path "+
+			"(e.g. /opt/homebrew/bin/curl); see ~/.anb/alice/exec-allowlist.json", cmdName)
+	}
+
+	s := localvault.Open(*dir)
+	list, err := loadAllowlist(s.Dir)
+	if err != nil {
+		if errors.Is(err, errAllowlistMissing) {
+			return fmt.Errorf("%s/exec-allowlist.json not found.\n\n"+
+				"alice exec is default-deny since v2.0.0. To enable any invocation,\n"+
+				"the allowlist file must exist (even if empty).\n\n"+
+				"Initialize with:\n"+
+				"    echo '{\"allow\":[]}' > %s/exec-allowlist.json\n\n"+
+				"Then re-run your alice exec command; the error will give you the\n"+
+				"exact triple to append.",
+				s.Dir, s.Dir)
+		}
+		return err
+	}
+
+	if matchAllowlist(cmdName, childArgs, envNames, list) == nil {
+		return fmt.Errorf("alice exec: invocation not in allowlist.\n\n"+
+			"  cmd:  %s\n"+
+			"  args: %s\n"+
+			"  env:  %s\n\n"+
+			"To allow exactly this invocation, append to allow[] in\n"+
+			"%s/exec-allowlist.json:\n\n"+
+			"%s\n\n"+
+			"Note: strict byte-for-byte equality on cmd, args (each position),\n"+
+			"and env name set. Any change — extra whitespace, different arg\n"+
+			"position, extra/missing env name — requires a new entry.\n"+
+			"Wildcards are not supported.",
+			cmdName,
+			mustMarshalJSON(childArgs),
+			mustMarshalJSON(sortedStringSlice(envNames)),
+			s.Dir,
+			formatDenyJSON(cmdName, childArgs, envNames))
+	}
+
+	// Past the gate — proceed with vault lookup, decrypt, restore, exec.
 	plaintexts := map[string]string{}
 	if len(keySet) > 0 {
-		s := localvault.Open(*dir)
 		v, lerr := s.Load()
 		if lerr != nil {
 			return lerr
@@ -254,12 +336,8 @@ func cmdExec(args []string) error {
 		}
 	}
 
-	// Restore placeholders in each --env value. Fail-closed on any unresolved
-	// placeholder (paranoid: shouldn't happen because we already validated
-	// against the vault above, but defensive).
 	resolved := make([]string, 0, len(parsed))
 	overridden := make(map[string]struct{}, len(parsed))
-	envNames := make([]string, 0, len(parsed))
 	for _, e := range parsed {
 		rr := redact.Restore(e.Value, func(k string) (string, bool) {
 			pt, ok := plaintexts[k]
@@ -270,20 +348,16 @@ func cmdExec(args []string) error {
 		}
 		resolved = append(resolved, e.Name+"="+rr.Content)
 		overridden[e.Name] = struct{}{}
-		envNames = append(envNames, e.Name)
 	}
 
 	merged := mergeEnv(resolved, overridden, os.Environ())
 
-	cmdPath, err := exec.LookPath(childArgv[0])
+	cmdPath, err := exec.LookPath(cmdName)
 	if err != nil {
-		return fmt.Errorf("exec lookup %q: %w", childArgv[0], err)
+		return fmt.Errorf("exec lookup %q: %w", cmdName, err)
 	}
 
-	// Audit hint to operator's stderr — key NAMES only, never plaintext.
 	fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
 
-	// syscall.Exec replaces alice's process image; the plaintexts in alice's
-	// heap are discarded by the kernel. fds 0/1/2 are inherited by the child.
 	return syscall.Exec(cmdPath, childArgv, merged)
 }
