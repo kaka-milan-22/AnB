@@ -108,7 +108,7 @@ protect the endpoints:
 - **`alice exec` env values are same-uid visible.** Resolved plaintexts
   reach the child via env vars; same-uid processes can read them via
   `/proc/<pid>/environ` (Linux, 0o400 owner-only — i.e. same uid + root)
-  or `ps eww` (macOS). This is strictly better than argv (Linux
+  or `ps eww` (macOS). This is strictly stronger than argv (Linux
   `/proc/<pid>/cmdline` is world-readable 0o644) but is NOT a
   memory-only channel. The allowlist limits *which* (cmd, args, env)
   triples can run, not what those processes do once running — the
