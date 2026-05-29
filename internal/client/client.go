@@ -13,8 +13,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/mtls"
-	"github.com/kaka-milan-22/AnB/internal/proto"
+	"github.com/kaka-milan-22/AnB/v2/internal/mtls"
+	"github.com/kaka-milan-22/AnB/v2/internal/proto"
 )
 
 var (

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/kaka-milan-22/AnB/internal/localvault"
-	"github.com/kaka-milan-22/AnB/internal/redact"
-	"github.com/kaka-milan-22/AnB/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v2/internal/redact"
+	"github.com/kaka-milan-22/AnB/v2/internal/term"
 )
 
 // envEntry is one parsed --env flag: a POSIX env name and its (possibly

@@ -15,9 +15,9 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/authz"
-	"github.com/kaka-milan-22/AnB/internal/keystore"
-	"github.com/kaka-milan-22/AnB/internal/proto"
+	"github.com/kaka-milan-22/AnB/v2/internal/authz"
+	"github.com/kaka-milan-22/AnB/v2/internal/keystore"
+	"github.com/kaka-milan-22/AnB/v2/internal/proto"
 )
 
 const (

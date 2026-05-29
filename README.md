@@ -131,16 +131,19 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-go install github.com/kaka-milan-22/AnB/cmd/bob@v2.1.0
-go install github.com/kaka-milan-22/AnB/cmd/alice@v2.1.0
+# Note the /v2/ in the path — Go modules require the major-version
+# suffix for v2+. Tags v2.0.0 and v2.1.0 predate the /v2 module path
+# and CANNOT be installed via `go install`; use v2.1.1 or later.
+go install github.com/kaka-milan-22/AnB/v2/cmd/bob@v2.1.1
+go install github.com/kaka-milan-22/AnB/v2/cmd/alice@v2.1.1
 
-# …or build from a local clone of the v2.1.0 tag
-git clone --branch v2.1.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v2.1.1 tag
+git clone --branch v2.1.1 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v2.1.0` with `@latest` to track unreleased changes on `main`.
+Replace `v2.1.1` with `@latest` to track unreleased changes on `main`.
 
 ---
 

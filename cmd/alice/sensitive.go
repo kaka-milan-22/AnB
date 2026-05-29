@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/internal/ca"
-	"github.com/kaka-milan-22/AnB/internal/localvault"
-	"github.com/kaka-milan-22/AnB/internal/pwgen"
-	"github.com/kaka-milan-22/AnB/internal/redact"
-	"github.com/kaka-milan-22/AnB/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/ca"
+	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v2/internal/pwgen"
+	"github.com/kaka-milan-22/AnB/v2/internal/redact"
+	"github.com/kaka-milan-22/AnB/v2/internal/term"
 )
 
 func nowStamp() string { return time.Now().UTC().Format(time.RFC3339) }
