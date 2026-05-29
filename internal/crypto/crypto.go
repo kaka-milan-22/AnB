@@ -46,8 +46,12 @@ func DefaultParams() Params { return Params{M: 64 * 1024, T: 3, P: 1} }
 
 // Envelope is the on-disk wrapped master key. iv/tag/wrapped are the
 // AES-256-GCM sealing of the master key under the Argon2id-derived KEK.
+// ID + Created are meta added in v3 (v2.6+) so each K can be addressed
+// by version within an EnvelopeFile.
 type Envelope struct {
-	KDF     string `json:"kdf"` // "argon2id"
+	ID      int    `json:"id,omitempty"`      // v3+: per-key version, 1..N
+	Created string `json:"created,omitempty"` // v3+: RFC3339 UTC of wrap time
+	KDF     string `json:"kdf"`               // "argon2id"
 	Salt    string `json:"salt"`
 	Params  Params `json:"params"`
 	IV      string `json:"iv"`

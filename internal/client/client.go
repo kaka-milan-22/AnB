@@ -18,12 +18,13 @@ import (
 )
 
 var (
-	ErrUnreachable   = errors.New("cannot reach Bob (is the daemon up / network ok?)")
-	ErrLocked        = errors.New("Bob is locked (operator has not unlocked the master key)")
-	ErrUnauthorized  = errors.New("not authorized for this key")
-	ErrDecryptFailed = errors.New("decrypt failed (wrong vault / corrupted ciphertext)")
-	ErrRateLimited   = errors.New("rate-limited by Bob (too many decrypts per minute)")
-	ErrProtocol      = errors.New("unexpected response from Bob")
+	ErrUnreachable       = errors.New("cannot reach Bob (is the daemon up / network ok?)")
+	ErrLocked            = errors.New("Bob is locked (operator has not unlocked the master key)")
+	ErrUnauthorized      = errors.New("not authorized for this key")
+	ErrDecryptFailed     = errors.New("decrypt failed (wrong vault / corrupted ciphertext)")
+	ErrRateLimited       = errors.New("rate-limited by Bob (too many decrypts per minute)")
+	ErrUnknownKeyVersion = errors.New("ciphertext references a finalized master-key version")
+	ErrProtocol          = errors.New("unexpected response from Bob")
 )
 
 type Client struct {
@@ -85,6 +86,8 @@ func mapErr(resp proto.Response) error {
 		return ErrDecryptFailed
 	case proto.CodeRateLimit:
 		return ErrRateLimited
+	case proto.CodeUnknownKeyVersion:
+		return ErrUnknownKeyVersion
 	default:
 		if resp.Error != "" {
 			return errors.New(resp.Error)
@@ -105,32 +108,40 @@ func (c *Client) Encrypt(key, plaintext string) (string, error) {
 	return resp.Packed, nil
 }
 
-// Decrypt asks Bob to decrypt one ciphertext.
-func (c *Client) Decrypt(key, packed string) (string, error) {
+// Decrypt asks Bob to decrypt one ciphertext. Returns (plaintext,
+// rewrappedPacked). rewrappedPacked is non-empty when Bob's CURRENT
+// master key version differs from the version embedded in `packed` —
+// the same plaintext re-sealed under the current K, ready for the
+// caller to write back to vault.json (opportunistic migration; v2.6+).
+func (c *Client) Decrypt(key, packed string) (plaintext, rewrappedPacked string, err error) {
 	resp, err := c.call(proto.Request{Op: proto.OpDecrypt, Key: key, Packed: packed})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !resp.OK {
-		return "", mapErr(resp)
+		return "", "", mapErr(resp)
 	}
-	return resp.Plaintext, nil
+	return resp.Plaintext, resp.RewrappedPacked, nil
 }
 
-// DecryptMany decrypts a batch in one round-trip (for `read` / `scan`). keys is
-// parallel to packed and used for per-key authorization.
-func (c *Client) DecryptMany(keys, packed []string) ([]string, error) {
+// DecryptMany decrypts a batch in one round-trip (for `read` / `scan`).
+// keys is parallel to packed and used for per-key authorization.
+// rewrappedMany is parallel to keys: each element is either the empty
+// string (already on current K) or the re-sealed packed string under
+// the current K (caller should write back). nil when nothing needs
+// rewrapping.
+func (c *Client) DecryptMany(keys, packed []string) (plaintexts, rewrappedMany []string, err error) {
 	if len(packed) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	resp, err := c.call(proto.Request{Op: proto.OpDecryptMany, Keys: keys, PackedMany: packed})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !resp.OK {
-		return nil, mapErr(resp)
+		return nil, nil, mapErr(resp)
 	}
-	return resp.PlaintextMany, nil
+	return resp.PlaintextMany, resp.RewrappedPackedMany, nil
 }
 
 // Status reports whether Bob is reachable and unlocked.

@@ -123,7 +123,7 @@ func TestFullFlow(t *testing.T) {
 		if !ok {
 			return "", false
 		}
-		pt, derr := cl.Decrypt(k, e.Value)
+		pt, _, derr := cl.Decrypt(k, e.Value)
 		if derr != nil {
 			t.Fatalf("decrypt %s: %v", k, derr)
 		}
@@ -151,7 +151,7 @@ func decryptAll(t *testing.T, cl *client.Client, v *localvault.Vault) map[string
 		keys = append(keys, k)
 		packed = append(packed, e.Value)
 	}
-	pts, err := cl.DecryptMany(keys, packed)
+	pts, _, err := cl.DecryptMany(keys, packed)
 	if err != nil {
 		t.Fatalf("decryptMany: %v", err)
 	}

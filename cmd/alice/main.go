@@ -40,6 +40,7 @@ func main() {
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
+		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 	}
 	fn, ok := cmds[os.Args[1]]
@@ -97,6 +98,8 @@ func usage() {
 	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
 	fmt.Fprintf(w, row, "template [opts] <src> <dst>", "Render <src>'s placeholders into <dst> with mode/owner (human only)")
 	fmt.Fprintf(w, row, "shell [--env K=V]... [-- shell]", "Sub-shell with --env injected; TTY-only (human only)")
+	fmt.Fprintf(w, row, "rekey-status", "Show per-K-version entry counts in vault.json (local)")
+	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 
@@ -166,6 +169,8 @@ func requireStdoutTTY(cmd string) {
 
 // decryptAllValues returns a map of plaintext→keyName for every secret, asking
 // Bob to decrypt the whole batch in one round-trip. Empty if the vault is empty.
+// Opportunistic v2.6 migration: any rewrapped entries are written back to
+// vault.json before returning (best-effort; failures don't block the caller).
 func decryptAllValues(s *localvault.Store) (map[string]string, error) {
 	v, err := s.Load()
 	if err != nil {
@@ -184,13 +189,57 @@ func decryptAllValues(s *localvault.Store) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	pts, err := cl.DecryptMany(keys, packed)
+	pts, rewraps, err := cl.DecryptMany(keys, packed)
 	if err != nil {
 		return nil, err
+	}
+	if n, werr := applyRewraps(s, keys, rewraps); werr != nil {
+		// Best-effort: log but don't fail the read path.
+		fmt.Fprintf(os.Stderr, "warning: failed to write back %d rewrapped entries: %v\n", n, werr)
 	}
 	m := make(map[string]string, len(keys))
 	for i := range keys {
 		m[pts[i]] = keys[i]
 	}
 	return m, nil
+}
+
+// applyRewraps overwrites vault entries whose ciphertext was rewrapped on
+// the fly. keys and rewrapped are parallel arrays from DecryptMany (or
+// length-1 from Decrypt). Empty entries in rewrapped are skipped. Atomic
+// (single Save) so a partial migration doesn't leave a torn vault. Returns
+// the number of entries updated.
+func applyRewraps(s *localvault.Store, keys, rewrapped []string) (int, error) {
+	if len(rewrapped) == 0 {
+		return 0, nil
+	}
+	if len(keys) != len(rewrapped) {
+		return 0, fmt.Errorf("applyRewraps: keys/rewrapped length mismatch (%d vs %d)", len(keys), len(rewrapped))
+	}
+	var toUpdate []int
+	for i, r := range rewrapped {
+		if r != "" {
+			toUpdate = append(toUpdate, i)
+		}
+	}
+	if len(toUpdate) == 0 {
+		return 0, nil
+	}
+	v, err := s.Load()
+	if err != nil {
+		return 0, err
+	}
+	for _, i := range toUpdate {
+		e, ok := v.Get(keys[i])
+		if !ok {
+			// Race: entry removed between decrypt and write — skip.
+			continue
+		}
+		e.Value = rewrapped[i]
+		v.Set(keys[i], e)
+	}
+	if err := s.Save(v); err != nil {
+		return 0, err
+	}
+	return len(toUpdate), nil
 }

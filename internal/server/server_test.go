@@ -341,6 +341,102 @@ func TestRateLimitEnforcedDecrypt(t *testing.T) {
 	}
 }
 
+// --- v2.6 lazy-rewrap invariants ---------------------------------------------
+
+// TestDecryptReturnsRewrapForLegacyV1: when Bob holds K1+K2 with current=K2
+// and a client sends a legacy (no-prefix / v1) ciphertext, the response
+// must include Plaintext + RewrappedPacked re-sealed under K2, and the
+// audit log gets a KEY_REWRAP event.
+func TestDecryptReturnsRewrapForLegacyV1(t *testing.T) {
+	k1, _ := crypto.NewMasterKey()
+	k2, _ := crypto.NewMasterKey()
+	store := keystore.New(nil)
+	store.HoldMulti(map[int][]byte{1: k1, 2: k2}, 2, 0)
+	h := newHarness(t, store, allowAll())
+
+	rawV1, err := crypto.Seal(k1, []byte("legacy-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := h.dial(t, "alice").call(t, proto.Request{Op: proto.OpDecrypt, Key: "k", Packed: rawV1})
+	if !resp.OK || resp.Plaintext != "legacy-secret" {
+		t.Fatalf("decrypt legacy: %+v", resp)
+	}
+	if !strings.HasPrefix(resp.RewrappedPacked, "v2:") {
+		t.Fatalf("rewrap must use current K's v2: prefix, got %q", resp.RewrappedPacked)
+	}
+	ev := lastOfKind(t, h, "KEY_REWRAP")
+	if ev["identity"] != "alice" || ev["op"] != "decrypt" {
+		t.Fatalf("KEY_REWRAP shape: %+v", ev)
+	}
+}
+
+// TestDecryptManyMixesRewrapsByPosition: a DecryptMany batch with mixed
+// versions (some legacy v1, some already on current K2) returns
+// RewrappedPackedMany aligned by position — non-current slots filled,
+// current slots empty string.
+func TestDecryptManyMixesRewrapsByPosition(t *testing.T) {
+	k1, _ := crypto.NewMasterKey()
+	k2, _ := crypto.NewMasterKey()
+	store := keystore.New(nil)
+	store.HoldMulti(map[int][]byte{1: k1, 2: k2}, 2, 0)
+	h := newHarness(t, store, allowAll())
+	c := h.dial(t, "alice")
+
+	// Build one legacy v1 and one current v2 ciphertext.
+	rawV1, _ := crypto.Seal(k1, []byte("old"))
+	rawV2Body, _ := crypto.Seal(k2, []byte("new"))
+	v2Packed := crypto.PackVersion(2, rawV2Body)
+
+	resp := c.call(t, proto.Request{
+		Op:         proto.OpDecryptMany,
+		Keys:       []string{"a", "b"},
+		PackedMany: []string{rawV1, v2Packed},
+	})
+	if !resp.OK || len(resp.PlaintextMany) != 2 {
+		t.Fatalf("decryptMany: %+v", resp)
+	}
+	if resp.PlaintextMany[0] != "old" || resp.PlaintextMany[1] != "new" {
+		t.Fatalf("plaintext mismatch: %v", resp.PlaintextMany)
+	}
+	if len(resp.RewrappedPackedMany) != 2 {
+		t.Fatalf("rewrappedMany should have len 2 to align with keys, got %v", resp.RewrappedPackedMany)
+	}
+	if !strings.HasPrefix(resp.RewrappedPackedMany[0], "v2:") {
+		t.Fatalf("position 0 (legacy) should be rewrapped, got %q", resp.RewrappedPackedMany[0])
+	}
+	if resp.RewrappedPackedMany[1] != "" {
+		t.Fatalf("position 1 (already current) should be empty, got %q", resp.RewrappedPackedMany[1])
+	}
+}
+
+// TestDecryptManyNoRewrapWhenAllCurrent: when every entry is already on
+// the current K, the server omits RewrappedPackedMany entirely (no audit
+// noise either).
+func TestDecryptManyNoRewrapWhenAllCurrent(t *testing.T) {
+	mk, _ := crypto.NewMasterKey()
+	store := keystore.New(nil)
+	store.HoldMulti(map[int][]byte{1: mk}, 1, 0)
+	h := newHarness(t, store, allowAll())
+	c := h.dial(t, "alice")
+
+	// Encrypt + decrypt — both under v1 = current.
+	p := c.call(t, proto.Request{Op: proto.OpEncrypt, Key: "k", Plaintext: "x"})
+	resp := c.call(t, proto.Request{Op: proto.OpDecryptMany, Keys: []string{"k"}, PackedMany: []string{p.Packed}})
+	if !resp.OK || resp.PlaintextMany[0] != "x" {
+		t.Fatalf("decrypt: %+v", resp)
+	}
+	if resp.RewrappedPackedMany != nil {
+		t.Fatalf("RewrappedPackedMany should be nil when all current, got %v", resp.RewrappedPackedMany)
+	}
+	// No KEY_REWRAP event in audit.
+	for _, ev := range auditLines(t, h) {
+		if ev["kind"] == "KEY_REWRAP" {
+			t.Fatalf("unexpected KEY_REWRAP when all on current: %+v", ev)
+		}
+	}
+}
+
 // TestRateLimitPerIdentityIsolated: two identities have independent buckets.
 func TestRateLimitPerIdentityIsolated(t *testing.T) {
 	policy := &authz.Policy{

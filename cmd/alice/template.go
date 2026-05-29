@@ -75,9 +75,12 @@ func cmdTemplate(args []string) error {
 			return cerr
 		}
 		cl.SetReason(*reason)
-		pts, derr := cl.DecryptMany(known, packed)
+		pts, rewraps, derr := cl.DecryptMany(known, packed)
 		if derr != nil {
 			return derr
+		}
+		if _, werr := applyRewraps(s, known, rewraps); werr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to write back rewrapped entries: %v\n", werr)
 		}
 		for i, k := range known {
 			plaintexts[k] = pts[i]

@@ -317,7 +317,9 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `bob init [--host h1,h2] [--force]` | Generate + wrap the master key, mint the server cert |
 | `bob sign-csr <csr> [--out F] [--ttl-days N] [--no-pair]` | Sign an Alice CSR → client cert. Interactive by default: prints CSR identity + pubkey fingerprint + an 8-digit OOB pairing code (10-minute TTL), confirms y/N before signing. `--no-pair` skips pairing and warns. |
 | `bob serve [--addr :8443] [--ttl SECONDS] [-D] [--log FILE]` | Unlock + run the mTLS oracle (`-D` detaches into the background) |
-| `bob rotate-master-password` | Re-wrap the master key K under a new password — K unchanged, vault.json untouched. See "Rotating the master password" below. |
+| `bob rotate-master-password [--keep-key]` | New password + a fresh K version (lazy rewrap); `--keep-key` retains the v2.3 behavior (password only, no new K). See "Master key rotation" below. |
+| `bob rotate-master-key [--finalize <id>] [--yes]` | Add a fresh K under the same password; `--finalize <id>` retires an old K (after every alice has rekey'd off it). |
+| `bob list-keys` | Show K versions in `envelope.json` (no password needed). |
 
 ### alice — safe (agent + human, no TTY)
 
@@ -343,6 +345,8 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets |
 | `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s `<agent-vault:k>` placeholders into `<dst>` with explicit mode (default `0600`) and optional ownership. Atomic write. See "Templating" below. |
 | `alice shell [--env K=V]... [--reason R] [-- shell args...]` | Spawn an interactive sub-shell with `--env` (placeholder-restored) injected. TTY-only (no allowlist); sets `ALICE_SHELL=1`. See "Sub-shell" below. |
+| `alice rekey-status` | Show per-K-version entry counts in this alice's vault.json (no Bob round-trip). |
+| `alice rekey [--reason R]` | Force-migrate every vault entry to Bob's current K version. |
 
 ### alice — setup
 
@@ -386,37 +390,94 @@ All randomness comes from `crypto/rand`.
 
 ---
 
-## Rotating the master password
+## Master key rotation (v2.6+)
 
-`bob rotate-master-password` re-wraps the existing master key K under a new
-passphrase. The key K **itself doesn't change**, so:
+Since v2.6 Bob stores the master key as a **versioned set** (`envelope.json`
+schema v3) and `bob rotate-master-password` **also adds a fresh K version by
+default**. Old vault.json ciphertext still decrypts (Bob can open any version
+it holds); on the next alice access of an old-K entry, Bob also returns the
+same plaintext re-sealed under the current K — alice writes it back to
+vault.json transparently. This is the "lazy rewrap" model from AWS KMS /
+Vault Transit, scoped down to a single self-hosted binary.
 
-- Every `alice` vault.json stays valid — alice clients are completely unaffected.
-- A currently-serving `bob` keeps running with K already in its mlock'd memory;
-  the new password is only needed at the **next** `bob serve` startup.
-- The previous password stops working the moment the rotation succeeds. There is
-  always exactly one valid password at a time — there is no "list" of accepted
-  passwords. If you want a recovery path, take an offline envelope backup first:
-  ```sh
-  scripts/anb-backup.sh bob /tmp/before-rotate.age   # ← do this before rotating
-  bob rotate-master-password
-  ```
-- The rotation also re-randomizes the Argon2id salt and picks up the current
-  `DefaultParams`, so it doubles as "refresh KDF cost" if defaults are ever bumped.
+### Three knobs
 
-Sources of input (same convention as `bob init` / `bob serve`):
+| Command | Effect |
+|---|---|
+| `bob rotate-master-password` | New password + new K (default). Bumps `current`. Old K versions are re-wrapped under the new password and stay around until you `--finalize` them. |
+| `bob rotate-master-password --keep-key` | v2.3 behavior — just change the password; no new K. |
+| `bob rotate-master-key` | New K under the SAME password (no password change). Useful for hygiene rotation between password changes. |
+| `bob rotate-master-key --finalize <id>` | Retire K_<id>. Refuses to retire `current`. After this, ciphertext under K_<id> is permanently unreadable. |
+| `bob list-keys` | List K versions + creation time + KDF params + which is current. No password needed. |
+| `alice rekey-status` | Local count of vault.json entries by K version (run on every enrolled alice before `--finalize`). |
+| `alice rekey` | Force-migrate every vault.json entry to the current K (otherwise it happens lazily on access). |
+
+### Lazy vs. eager migration
+
+- **Lazy** (default): alice reads `get`/`read`/`exec`/`template`/`shell` decrypt
+  old-K entries on demand; Bob's response carries a `rewrappedPacked` field
+  with the same plaintext under the current K, which alice writes back to
+  `vault.json`. Over time the vault drifts to the current K with zero operator
+  effort. Operator visibility via `alice rekey-status`.
+- **Eager**: `alice rekey` decrypts every stored entry via `DecryptMany` and
+  writes back all rewrapped values in a single `vault.json` `Save`. Used right
+  before `--finalize` to confirm zero non-current entries.
+
+### When to `--finalize`
+
+Old K versions stay in `envelope.json` (re-wrapped under the current
+password) until you explicitly retire them. There's no rush — they're
+encrypted at rest. But two reasons to clean up:
+
+1. **Hygiene** — every K version on disk is one more KDF target if an
+   attacker steals `envelope.json` + the master password.
+2. **Suspected leak** — if you think K_<id> was exposed (e.g. an attacker
+   briefly had filesystem + memory access), `--finalize` removes Bob's
+   ability to decrypt under that K. Attackers who already extracted the
+   K bytes can still decrypt offline; what `--finalize` defends is Bob
+   being used as a decrypt oracle going forward, plus any future
+   `envelope.json` leak no longer containing K_<id>.
+
+Routine workflow:
+
+```sh
+scripts/anb-backup.sh bob /tmp/before-rotate.age      # 0. recovery snapshot
+
+bob rotate-master-password                            # 1. new pw + new K (default)
+# ... or: bob rotate-master-key                       #    new K only, no pw change
+
+bob list-keys                                         # 2. see what's there
+alice rekey-status                                    # 3. see what's still on old K (per alice)
+alice rekey                                           # 4. force-migrate this alice
+# repeat on every enrolled alice if you have more than one identity
+
+bob rotate-master-key --finalize 1                    # 5. retire K_1 (NOT current)
+# Restart the daemon so K_1 is also wiped from in-memory:
+kill $(cat ~/.anb/bob/bob.pid) && bob serve -D --addr 127.0.0.1:8443
+```
+
+### Inputs (same env-var convention as the rest of bob)
 
 | Field | Env var (for automation) | Interactive default |
 |---|---|---|
-| Current password | `$ANB_BOB_PASSWORD` | `Current master password:` |
-| New password | `$ANB_BOB_NEW_PASSWORD` | `New master password:` (entered twice) |
+| Current password (rotate-pw, rotate-key, --finalize) | `$ANB_BOB_PASSWORD` | `Current master password:` / `Master password:` |
+| New password (rotate-master-password only) | `$ANB_BOB_NEW_PASSWORD` | `New master password:` (entered twice) |
+| Bypass `--finalize` confirm | `--yes` flag | interactive `Type 'yes' to confirm:` |
 
-Failure modes are atomic: if the current password is wrong or the new one
-doesn't confirm, `envelope.json` is byte-for-byte unchanged.
+### Atomic failure modes
 
-This rotates **only the password**, not K. Rotating K itself (re-encrypting
-every alice's vault.json under a fresh K) is a separate, heavier operation —
-see `bob rotate-master-key` (not yet implemented).
+Every rotation/finalize is atomic at the disk level: if any unwrap fails
+(wrong password, malformed envelope, bad K_id), `envelope.json` is
+byte-for-byte unchanged.
+
+### Bonus: free KDF cost refresh
+
+Every wrapped K carries its own Argon2id salt + params (`m`, `t`, `p`).
+Every rotation re-randomizes the salt and picks up the current
+`crypto.DefaultParams()`, so if the project ever bumps the KDF cost
+the next rotation transparently upgrades the new K to it. Old K versions
+keep their original params — useful as historical record but also another
+reason to `--finalize` eventually.
 
 ---
 
@@ -469,6 +530,7 @@ parsing; this is the v2.5 breaking change.
 | `ALLOW` | `identity`, `op`, `keys` (array), `reason` (operator-supplied, omitted when empty) |
 | `DENY` | `identity`, `op`, `key`, `cause` (e.g. `"unauthorized"`) |
 | `RATELIMIT` | `identity`, `op`, `cause: "limit-exceeded"` |
+| `KEY_REWRAP` | `identity`, `op`, `key` (or `keys` for `decryptMany`), `count` — lazy K migration happened (v2.6+) |
 | `HANDSHAKE_FAIL` | `remote`, `err` |
 | `DROP` | `identity`, `cause` (e.g. `"request-too-large"`) |
 | `PANIC` | `err`, `stack` |

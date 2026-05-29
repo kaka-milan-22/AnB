@@ -13,7 +13,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -61,6 +60,10 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "rotate-master-password":
 		err = cmdRotateMasterPassword(os.Args[2:])
+	case "rotate-master-key":
+		err = cmdRotateMasterKey(os.Args[2:])
+	case "list-keys":
+		err = cmdListKeys(os.Args[2:])
 	case "version", "--version", "-V":
 		version.Print(os.Stdout, "bob")
 		return
@@ -92,7 +95,9 @@ func usage() {
 	fmt.Fprintf(w, row, "init [options]", "Generate + wrap the master key, mint the server cert")
 	fmt.Fprintf(w, row, "sign-csr [options] <csr.pem>", "Sign an Alice CSR → client certificate")
 	fmt.Fprintf(w, row, "serve [options]", "Unlock the master key and run the mTLS oracle (-D to daemonize)")
-	fmt.Fprintf(w, row, "rotate-master-password", "Re-wrap the master key under a new password (K unchanged; vault.json untouched)")
+	fmt.Fprintf(w, row, "rotate-master-password", "New password + new K (lazy rewrap). --keep-key keeps the old behavior (password only).")
+	fmt.Fprintf(w, row, "rotate-master-key", "Add a fresh K under the same password; --finalize <id> retires an old K.")
+	fmt.Fprintf(w, row, "list-keys", "Show K versions in envelope.json (no password needed).")
 
 	fmt.Fprint(w, "\nCommon: --dir DIR        state dir (default ~/.anb/bob or $ANB_BOB_DIR)\n")
 	fmt.Fprint(w, "        $ANB_BOB_PASSWORD master password for init/serve (else prompted on a TTY)\n")
@@ -216,7 +221,16 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	envJSON, _ := json.MarshalIndent(env, "", "  ")
+	env.ID = 1
+	env.Created = time.Now().UTC().Format(time.RFC3339)
+	envFile := &crypto.EnvelopeFile{
+		Keys:    []crypto.Envelope{*env},
+		Current: 1,
+	}
+	envJSON, err := crypto.MarshalEnvelopeFile(envFile)
+	if err != nil {
+		return err
+	}
 	if err := writeFile(d, "envelope.json", envJSON, 0o600); err != nil {
 		return err
 	}
@@ -380,8 +394,8 @@ func cmdServe(args []string) error {
 	srvKey, _ := readFile(d, "server.key")
 	envJSON, _ := readFile(d, "envelope.json")
 
-	var env crypto.Envelope
-	if err := json.Unmarshal(envJSON, &env); err != nil {
+	envFile, err := crypto.LoadEnvelopeFile(envJSON)
+	if err != nil {
 		return fmt.Errorf("envelope.json: %w", err)
 	}
 
@@ -414,7 +428,13 @@ func cmdServe(args []string) error {
 	// fails immediately, not silently in the background), then re-exec a detached
 	// child and hand it the password over a pipe.
 	if *daemon && !isChild {
-		mk, err := crypto.Unwrap(&env, password) // validate before detaching
+		// Validate the password against the CURRENT K before detaching so a
+		// wrong one fails immediately, not silently in the background.
+		cur := envFile.FindKey(envFile.Current)
+		if cur == nil {
+			return fmt.Errorf("envelope.json: current=%d but no such key", envFile.Current)
+		}
+		mk, err := crypto.Unwrap(cur, password)
 		if err != nil {
 			return err
 		}
@@ -422,9 +442,18 @@ func cmdServe(args []string) error {
 		return daemonize(d, *logPath, password)
 	}
 
-	mk, err := crypto.Unwrap(&env, password)
-	if err != nil {
-		return err
+	// Unwrap every held K version under the same operator password.
+	mks := make(map[int][]byte, len(envFile.Keys))
+	for i := range envFile.Keys {
+		k, err := crypto.Unwrap(&envFile.Keys[i], password)
+		if err != nil {
+			// Wipe any keys we already unwrapped before failing.
+			for _, w := range mks {
+				crypto.Wipe(w)
+			}
+			return fmt.Errorf("unwrap K_%d: %w", envFile.Keys[i].ID, err)
+		}
+		mks[envFile.Keys[i].ID] = k
 	}
 
 	// v2.5+: ALL bob log output is JSON (one event per line, ts in payload).
@@ -440,8 +469,7 @@ func cmdServe(args []string) error {
 	}
 
 	store := keystore.New(func() { audit("AUTOLOCK", "msg", "master key auto-locked (idle TTL); restart serve to unlock") })
-	store.Hold(mk, time.Duration(*ttl)*time.Second) // store mlocks + owns mk now
-	crypto.Wipe(mk)
+	store.HoldMulti(mks, envFile.Current, time.Duration(*ttl)*time.Second) // store mlocks + owns all K versions now
 
 	tlsCfg, err := mtls.ServerConfig(srvCert, srvKey, caCertPEM)
 	if err != nil {
