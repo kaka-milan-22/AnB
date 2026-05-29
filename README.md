@@ -423,12 +423,14 @@ locked refusal) against a real Bob over mTLS.
 
 ## Status & roadmap
 
-v1 is functional. Not yet implemented (planned):
+v2 is functional. Not yet implemented (planned):
 
-- Bob KEK sealed to a TPM / cloud KMS for unattended restart (v1 unlocks with an
-  operator master password).
+- Bob KEK sealed to a TPM / cloud KMS for unattended restart (v2 still
+  unlocks with an operator master password).
 - Alice's client key on hardware (PKCS#11 / Secure Enclave).
 - Certificate revocation lists / short-lived client certs.
+- `alice exec` allowlist patterns: wildcards / regex / args-prefix matching
+  (v2 is strict byte-for-byte; per-entry patterns are a future iteration).
 
 ---
 
