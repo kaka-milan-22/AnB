@@ -60,6 +60,8 @@ func main() {
 		err = cmdSignCSR(os.Args[2:])
 	case "serve":
 		err = cmdServe(os.Args[2:])
+	case "rotate-master-password":
+		err = cmdRotateMasterPassword(os.Args[2:])
 	case "version", "--version", "-V":
 		version.Print(os.Stdout, "bob")
 		return
@@ -91,6 +93,7 @@ func usage() {
 	fmt.Fprintf(w, row, "init [options]", "Generate + wrap the master key, mint the server cert")
 	fmt.Fprintf(w, row, "sign-csr [options] <csr.pem>", "Sign an Alice CSR → client certificate")
 	fmt.Fprintf(w, row, "serve [options]", "Unlock the master key and run the mTLS oracle (-D to daemonize)")
+	fmt.Fprintf(w, row, "rotate-master-password", "Re-wrap the master key under a new password (K unchanged; vault.json untouched)")
 
 	fmt.Fprint(w, "\nCommon: --dir DIR        state dir (default ~/.anb/bob or $ANB_BOB_DIR)\n")
 	fmt.Fprint(w, "        $ANB_BOB_PASSWORD master password for init/serve (else prompted on a TTY)\n")

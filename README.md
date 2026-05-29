@@ -317,6 +317,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `bob init [--host h1,h2] [--force]` | Generate + wrap the master key, mint the server cert |
 | `bob sign-csr <csr> [--out F] [--ttl-days N] [--no-pair]` | Sign an Alice CSR → client cert. Interactive by default: prints CSR identity + pubkey fingerprint + an 8-digit OOB pairing code (10-minute TTL), confirms y/N before signing. `--no-pair` skips pairing and warns. |
 | `bob serve [--addr :8443] [--ttl SECONDS] [-D] [--log FILE]` | Unlock + run the mTLS oracle (`-D` detaches into the background) |
+| `bob rotate-master-password` | Re-wrap the master key K under a new password — K unchanged, vault.json untouched. See "Rotating the master password" below. |
 
 ### alice — safe (agent + human, no TTY)
 
@@ -380,6 +381,40 @@ alice set stripe-key --generate --style full -l 24   # generate + store, never p
 - **`pin`** — digits only.
 
 All randomness comes from `crypto/rand`.
+
+---
+
+## Rotating the master password
+
+`bob rotate-master-password` re-wraps the existing master key K under a new
+passphrase. The key K **itself doesn't change**, so:
+
+- Every `alice` vault.json stays valid — alice clients are completely unaffected.
+- A currently-serving `bob` keeps running with K already in its mlock'd memory;
+  the new password is only needed at the **next** `bob serve` startup.
+- The previous password stops working the moment the rotation succeeds. There is
+  always exactly one valid password at a time — there is no "list" of accepted
+  passwords. If you want a recovery path, take an offline envelope backup first:
+  ```sh
+  scripts/anb-backup.sh bob /tmp/before-rotate.age   # ← do this before rotating
+  bob rotate-master-password
+  ```
+- The rotation also re-randomizes the Argon2id salt and picks up the current
+  `DefaultParams`, so it doubles as "refresh KDF cost" if defaults are ever bumped.
+
+Sources of input (same convention as `bob init` / `bob serve`):
+
+| Field | Env var (for automation) | Interactive default |
+|---|---|---|
+| Current password | `$ANB_BOB_PASSWORD` | `Current master password:` |
+| New password | `$ANB_BOB_NEW_PASSWORD` | `New master password:` (entered twice) |
+
+Failure modes are atomic: if the current password is wrong or the new one
+doesn't confirm, `envelope.json` is byte-for-byte unchanged.
+
+This rotates **only the password**, not K. Rotating K itself (re-encrypting
+every alice's vault.json under a fresh K) is a separate, heavier operation —
+see `bob rotate-master-key` (not yet implemented).
 
 ---
 

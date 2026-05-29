@@ -61,6 +61,51 @@ func TestUnwrapBadPassword(t *testing.T) {
 	}
 }
 
+// TestRotatePassword is the cryptographic core of `bob rotate-master-password`:
+// unwrap with old → wrap same K with new → unwrap with new must yield byte-equal
+// K, and neither password may open the other envelope.
+func TestRotatePassword(t *testing.T) {
+	mk0, _ := NewMasterKey()
+	env1, err := Wrap(mk0, "pw-old")
+	if err != nil {
+		t.Fatalf("initial wrap: %v", err)
+	}
+
+	// rotate: unwrap with old, rewrap with new
+	mk1, err := Unwrap(env1, "pw-old")
+	if err != nil {
+		t.Fatalf("unwrap old: %v", err)
+	}
+	env2, err := Wrap(mk1, "pw-new")
+	if err != nil {
+		t.Fatalf("rewrap new: %v", err)
+	}
+
+	// invariant 1: K survives unchanged across the rotation
+	mk2, err := Unwrap(env2, "pw-new")
+	if err != nil {
+		t.Fatalf("unwrap new: %v", err)
+	}
+	if !bytes.Equal(mk0, mk2) {
+		t.Fatal("master key changed across rotation — K must be invariant")
+	}
+
+	// invariant 2: old password no longer opens the new envelope
+	if _, err := Unwrap(env2, "pw-old"); err != ErrBadPassword {
+		t.Fatalf("old password should fail on new envelope, got %v", err)
+	}
+	// and the new password doesn't open the (pre-rotation) old envelope
+	if _, err := Unwrap(env1, "pw-new"); err != ErrBadPassword {
+		t.Fatalf("new password should fail on old envelope, got %v", err)
+	}
+
+	// salt actually changes (Wrap re-randomizes), which is why the same
+	// password+same-K produces a different envelope each time.
+	if env1.Salt == env2.Salt {
+		t.Fatal("salt should be re-randomized on rewrap")
+	}
+}
+
 // Guards the agent-vault TS wire format: a value sealed elsewhere as
 // ivHex:tagHex:ctHex with the same key must Open here (migration compat).
 func TestOpenAcceptsExternalFormat(t *testing.T) {
