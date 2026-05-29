@@ -367,6 +367,31 @@ func cmdExec(args []string) error {
 	return syscall.Exec(cmdPath, childArgv, merged)
 }
 
+// appendAllowEntry reads exec-allowlist.json from dir, parses it,
+// appends entry to Allow, and writes back atomically (via the existing
+// localvault writeAtomic helper). Returns errAllowlistMissing if the
+// file does not exist — callers should not attempt to "create + append"
+// because the missing file is itself an operator-deliberate state
+// (default-deny scaffold; see cmdEnroll).
+func appendAllowEntry(dir string, entry allowEntry) error {
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		return err
+	}
+	list.Allow = append(list.Allow, entry)
+
+	// Re-marshal with stable indentation matching the scaffold style so
+	// the file remains human-editable after auto-appends.
+	body, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal allowlist: %w", err)
+	}
+	body = append(body, '\n')
+
+	s := localvault.Open(dir)
+	return s.WriteFile("exec-allowlist.json", body, 0o600)
+}
+
 // confirmAppend prints a "type 'yes' to confirm" prompt to out and reads
 // one line from in. Returns true iff the trimmed-lowercase input is
 // exactly "yes" — a single "y" does NOT count, deliberately, because the
