@@ -33,6 +33,7 @@ import (
 	"github.com/kaka-milan-22/AnB/v2/internal/mtls"
 	"github.com/kaka-milan-22/AnB/v2/internal/server"
 	"github.com/kaka-milan-22/AnB/v2/internal/term"
+	"github.com/kaka-milan-22/AnB/v2/internal/version"
 )
 
 const pairCodeTTL = 10 * time.Minute
@@ -59,6 +60,9 @@ func main() {
 		err = cmdSignCSR(os.Args[2:])
 	case "serve":
 		err = cmdServe(os.Args[2:])
+	case "version", "--version", "-V":
+		version.Print(os.Stdout, "bob")
+		return
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -80,6 +84,7 @@ func usage() {
 
 	fmt.Fprint(w, "Options:\n")
 	fmt.Fprintf(w, row, "-h, --help", "display help for command")
+	fmt.Fprintf(w, row, "-V, --version", "print version and exit")
 
 	fmt.Fprint(w, "\nCommands:\n")
 	fmt.Fprintf(w, row, "ca init [options]", "Create the private CA — the trust root for everyone")
