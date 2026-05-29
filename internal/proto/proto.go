@@ -24,6 +24,11 @@ const (
 
 // Request is one operation. Key/Keys are the logical vault key names (NOT the
 // ciphertext), used for authorization.
+//
+// Reason is operator-supplied free-text that Bob logs in the ALLOW audit
+// line. It does NOT participate in authorization — a compromised agent can
+// forge any reason it likes — but it gives the operator a "why" column when
+// auditing. Empty Reason is omitted from the wire and the audit line.
 type Request struct {
 	Op         string   `json:"op"`
 	Key        string   `json:"key,omitempty"`
@@ -31,6 +36,7 @@ type Request struct {
 	Plaintext  string   `json:"plaintext,omitempty"`
 	Packed     string   `json:"packed,omitempty"`
 	PackedMany []string `json:"packedMany,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 }
 
 // Response is one result. OK gates the payload fields; on failure Code/Error

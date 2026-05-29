@@ -328,14 +328,14 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
 | `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
 | `alice status` | Enrollment + Bob reachability/unlock state |
-| `alice exec [--env KEY=V]... -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.json`; on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see Authorization / allowlist sections for the JSON schema. |
+| `alice exec [--env KEY=V]... [--reason R] -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.json`; on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see Authorization / allowlist sections for the JSON schema. Allowlist entries may carry an optional `"label"` field used in audit/error output and as the default `--reason` fallback. |
 
 ### alice — sensitive (human only, TTY required)
 
 | Command | Description |
 |---|---|
 | `alice set <key> [--desc D] [--from-env V] [--stdin] [--generate] [--style S] [-l N] [--force]` | Store a secret (encrypted by Bob); `--generate` makes a random value instead of entering one |
-| `alice get <key> [--reveal]` | Metadata, or the value with `--reveal` |
+| `alice get <key> [--reveal] [--reason R]` | Metadata, or the value with `--reveal`. `--reason` is logged in Bob's ALLOW audit line. |
 | `alice rm <key>` | Remove a secret |
 | `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
 | `alice import <file> [--min-length N]` | Bulk-import a `.env` file |
@@ -415,6 +415,52 @@ doesn't confirm, `envelope.json` is byte-for-byte unchanged.
 This rotates **only the password**, not K. Rotating K itself (re-encrypting
 every alice's vault.json under a fresh K) is a separate, heavier operation —
 see `bob rotate-master-key` (not yet implemented).
+
+---
+
+## Audit clarity (`--reason`, allowlist `label`)
+
+Bob's audit log (whatever sink it points at — stderr in the foreground, the
+`-D` log file in daemon mode) records every authorized access. Two v2.4 fields
+make that log answer **why**, not just *who/when/what*:
+
+- **`alice get <key> --reveal --reason "<why>"`** and
+  **`alice exec --reason "<why>" -- …`** add a free-text reason that Bob logs
+  in the ALLOW line as `reason="..."`.
+- **Allowlist entries may carry `"label": "<short-name>"`** —
+  purely operator metadata (it doesn't participate in matching). When a
+  labeled entry runs without an explicit `--reason`, alice automatically uses
+  `[<label>]` as the audit reason, so blessed agent paths get free attribution.
+
+```sh
+alice get reminder-bot-token --reveal --reason "rotating reminder bot creds"
+# bob.log → ALLOW identity="..." op=decrypt keys=[reminder-bot-token] reason="rotating reminder bot creds"
+
+# allowlist entry with "label": "n9e-login":
+alice exec --env N9E_USER='<agent-vault:n9euser>' \
+           --env N9E_PASSWORD='<agent-vault:n9epassword>' \
+           -- /Users/.../node /Users/.../n9e-auth.js
+# bob.log → ALLOW identity="..." op=decryptMany keys=[...] reason="[n9e-login]"
+```
+
+**Important: `--reason` is audit-only, not an authorization input.** A
+compromised agent can forge any reason it wants. The value is for the
+*operator* reading the log: anomalous reasons (or expected ones missing) are
+the signal. AnB never gates access on reason content.
+
+Audit format reference (v2.4):
+
+| Line | Tokens |
+|---|---|
+| ALLOW | `identity=` `op=` `keys=` `reason=` *(omitted when empty)* |
+| DENY  | `identity=` `op=` `key=`  `cause=` *(e.g. `cause=unauthorized`)* |
+| HANDSHAKE_FAIL | `remote=` `err=` |
+| DROP  | `identity=` `reason=request-too-large` *(server-emitted cause, not the wire field)* |
+
+> `cause=` (Bob's reason for denying) was named `reason=` before v2.4. The
+> rename frees `reason=` for the operator-supplied wire field. Pre-v2.4
+> clients that don't send a reason produce ALLOW lines with no `reason=`
+> token at all (backward compatible).
 
 ---
 

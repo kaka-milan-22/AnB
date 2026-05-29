@@ -81,10 +81,17 @@ func mergeEnv(resolved []string, overridden map[string]struct{}, parent []string
 }
 
 // allowEntry is one strict-match entry in the alice exec allowlist.
+//
+// Label is operator metadata — purely cosmetic and ignored by matchAllowlist.
+// When set on a matched entry, alice's stderr "→ exec ..." line embeds it
+// and (if --reason wasn't passed) it falls through to Bob as the audit
+// reason in the form "[label]". This gives operators free audit attribution
+// for blessed agent paths without having to thread --reason everywhere.
 type allowEntry struct {
-	Cmd  string   `json:"cmd"`
-	Args []string `json:"args"`
-	Env  []string `json:"env"`
+	Label string   `json:"label,omitempty"`
+	Cmd   string   `json:"cmd"`
+	Args  []string `json:"args"`
+	Env   []string `json:"env"`
 }
 
 // allowlist is the on-disk shape of ~/.anb/alice/exec-allowlist.json.
@@ -255,6 +262,7 @@ func cmdExec(args []string) error {
 	dir := dirFlag(fs)
 	var envs envFlagValue
 	fs.Var(&envs, "env", "KEY=VALUE for the child; VALUE may contain <agent-vault:key> placeholders (repeatable)")
+	reasonFlag := fs.String("reason", "", `audit-only "why" string; logged in Bob's ALLOW line. If unset, a matched allowlist entry's label (if any) is used as "[label]".`)
 	if err := fs.Parse(aliceArgs); err != nil {
 		return err
 	}
@@ -301,7 +309,8 @@ func cmdExec(args []string) error {
 		return err
 	}
 
-	if matchAllowlist(cmdName, childArgs, envNames, list) == nil {
+	matched := matchAllowlist(cmdName, childArgs, envNames, list)
+	if matched == nil {
 		denyMsg := fmt.Sprintf("alice exec: invocation not in allowlist.\n\n"+
 			"  cmd:  %s\n"+
 			"  args: %s\n"+
@@ -312,7 +321,10 @@ func cmdExec(args []string) error {
 			"Note: strict byte-for-byte equality on cmd, args (each position),\n"+
 			"and env name set. Any change — extra whitespace, different arg\n"+
 			"position, extra/missing env name — requires a new entry.\n"+
-			"Wildcards are not supported.",
+			"Wildcards are not supported.\n\n"+
+			"Tip: add an optional `\"label\": \"<short-name>\"` field to the entry to\n"+
+			"tag it in audit/error output (e.g. \"n9e-login\"). Labels are operator\n"+
+			"metadata and don't participate in matching.",
 			cmdName,
 			mustMarshalJSON(childArgs),
 			mustMarshalJSON(sortedStringSlice(envNames)),
@@ -368,6 +380,14 @@ func cmdExec(args []string) error {
 		if cerr != nil {
 			return cerr
 		}
+		// Operator-supplied --reason wins; otherwise fall back to the
+		// matched entry's label (formatted as "[label]" so audit consumers
+		// can tell at a glance it came from the allowlist, not the caller).
+		reason := *reasonFlag
+		if reason == "" && matched.Label != "" {
+			reason = "[" + matched.Label + "]"
+		}
+		cl.SetReason(reason)
 		pts, derr := cl.DecryptMany(keys, packed)
 		if derr != nil {
 			return derr
@@ -398,7 +418,11 @@ func cmdExec(args []string) error {
 		return fmt.Errorf("exec lookup %q: %w", cmdName, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
+	if matched.Label != "" {
+		fmt.Fprintf(os.Stderr, "→ exec [%s] %s with env=%v\n", matched.Label, cmdPath, envNames)
+	} else {
+		fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
+	}
 
 	return syscall.Exec(cmdPath, childArgv, merged)
 }

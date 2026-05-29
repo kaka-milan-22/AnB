@@ -29,7 +29,15 @@ type Client struct {
 	addr   string
 	tlsCfg *tls.Config
 	dialTO time.Duration
+	// reason is attached to every outbound proto.Request. Operator-supplied
+	// free text; logged by Bob in the ALLOW audit line, not authorized on.
+	// SetReason once per logical alice invocation.
+	reason string
 }
+
+// SetReason stamps every subsequent outbound request with reason. Bob will
+// log it in the ALLOW audit line. Pass "" to clear.
+func (c *Client) SetReason(reason string) { c.reason = reason }
 
 // New builds a client from Alice's cert/key, the CA trust anchor, Bob's address
 // and the server name (SAN) to verify.
@@ -42,6 +50,7 @@ func New(addr, serverName string, clientCertPEM, clientKeyPEM, caPEM []byte) (*C
 }
 
 func (c *Client) call(req proto.Request) (proto.Response, error) {
+	req.Reason = c.reason
 	d := &net.Dialer{Timeout: c.dialTO}
 	conn, err := tls.DialWithDialer(d, "tcp", c.addr, c.tlsCfg)
 	if err != nil {

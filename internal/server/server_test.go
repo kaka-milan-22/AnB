@@ -2,11 +2,13 @@ package server_test
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
-	"io"
 	"log"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,9 +21,30 @@ import (
 	"github.com/kaka-milan-22/AnB/v2/internal/server"
 )
 
+// syncBuffer is a goroutine-safe bytes.Buffer wrapper. log.Logger already
+// serializes its own writes, but reading the buffer in the test goroutine
+// concurrently with the server goroutine's writes is a separate race —
+// this gives us a clean read side.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type harness struct {
 	authority *ca.CA
 	addr      string
+	audit     *syncBuffer // populated by newHarness; nil-ish (unused) for tests that don't read it
 }
 
 // newHarness starts a Bob oracle on loopback mTLS with the given store+policy.
@@ -44,9 +67,10 @@ func newHarness(t *testing.T, store *keystore.Store, policy *authz.Policy) *harn
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	srv := server.New(store, policy, log.New(io.Discard, "", 0))
+	audit := &syncBuffer{}
+	srv := server.New(store, policy, log.New(audit, "", 0))
 	go srv.Serve(ln)
-	return &harness{authority: authority, addr: ln.Addr().String()}
+	return &harness{authority: authority, addr: ln.Addr().String(), audit: audit}
 }
 
 type client struct {
@@ -186,5 +210,56 @@ func TestOversizedRequestDropped(t *testing.T) {
 	}
 	if resp.OK || resp.Code != proto.CodeBadRequest {
 		t.Fatalf("expected CodeBadRequest for oversized request, got %+v", resp)
+	}
+}
+
+// TestAuditAllowWithReason: a request with Reason set lands in the ALLOW
+// line as reason="...". This is the new v2.4 wire field.
+func TestAuditAllowWithReason(t *testing.T) {
+	h := newHarness(t, unlockedStore(t), allowAll())
+	resp := h.dial(t, "alice").call(t, proto.Request{
+		Op: proto.OpEncrypt, Key: "k", Plaintext: "v",
+		Reason: "manual review",
+	})
+	if !resp.OK {
+		t.Fatalf("encrypt: %+v", resp)
+	}
+	got := h.audit.String()
+	for _, want := range []string{"ALLOW", `identity="alice"`, "op=encrypt", `reason="manual review"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("audit line missing %q: %q", want, got)
+		}
+	}
+}
+
+// TestAuditAllowWithoutReason: backward compat — an old client that doesn't
+// send Reason gets the legacy ALLOW line with no reason= token at all.
+func TestAuditAllowWithoutReason(t *testing.T) {
+	h := newHarness(t, unlockedStore(t), allowAll())
+	h.dial(t, "alice").call(t, proto.Request{Op: proto.OpEncrypt, Key: "k", Plaintext: "v"})
+	got := h.audit.String()
+	if !strings.Contains(got, "ALLOW") {
+		t.Fatalf("want ALLOW in audit: %q", got)
+	}
+	if strings.Contains(got, "reason=") {
+		t.Fatalf("ALLOW without Reason should not contain reason= token: %q", got)
+	}
+}
+
+// TestAuditDenyUsesCause: DENY lines moved from `reason=unauthorized` to
+// `cause=unauthorized`; `reason=` is now exclusively operator-supplied.
+func TestAuditDenyUsesCause(t *testing.T) {
+	policy := &authz.Policy{Rules: map[string][]string{"alice": {"ok-"}}}
+	h := newHarness(t, unlockedStore(t), policy)
+	resp := h.dial(t, "alice").call(t, proto.Request{Op: proto.OpEncrypt, Key: "denied-key", Plaintext: "v"})
+	if resp.OK || resp.Code != proto.CodeUnauthorized {
+		t.Fatalf("expected unauthorized response, got %+v", resp)
+	}
+	got := h.audit.String()
+	if !strings.Contains(got, "DENY") || !strings.Contains(got, "cause=unauthorized") {
+		t.Fatalf("want DENY + cause=unauthorized, got %q", got)
+	}
+	if strings.Contains(got, "reason=unauthorized") {
+		t.Fatalf("old DENY format `reason=unauthorized` must be gone, got %q", got)
 	}
 }

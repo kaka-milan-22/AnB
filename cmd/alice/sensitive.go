@@ -131,14 +131,17 @@ func confirmOverwrite(key string, e localvault.SecretEntry) bool {
 	return ok
 }
 
-// get <key> [--reveal] — metadata, or the value (human only, stdout TTY).
+// get <key> [--reveal] [--reason "..."] — metadata, or the value (human only,
+// stdout TTY). --reason is logged in Bob's ALLOW audit line; audit-only, not
+// authorized on.
 func cmdGet(args []string) error {
 	fs := newFS("get")
 	dir := dirFlag(fs)
 	reveal := fs.Bool("reveal", false, "show the actual secret value")
+	reason := fs.String("reason", "", `audit-only "why" string; logged in Bob's ALLOW line`)
 	pos := parse(fs, args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice get <key> [--reveal]")
+		return fmt.Errorf("usage: alice get <key> [--reveal] [--reason R]")
 	}
 	requireTTY("alice get")
 	key := pos[0]
@@ -157,6 +160,7 @@ func cmdGet(args []string) error {
 		if err != nil {
 			return err
 		}
+		cl.SetReason(*reason)
 		pt, err := cl.Decrypt(key, e.Value)
 		if err != nil {
 			return err

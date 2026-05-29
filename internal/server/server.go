@@ -120,7 +120,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		}
 
 	case proto.OpEncrypt:
-		if resp, ok := s.guard(identity, []string{req.Key}, "encrypt"); !ok {
+		if resp, ok := s.guard(identity, []string{req.Key}, "encrypt", req.Reason); !ok {
 			return resp
 		}
 		packed, err := s.store.Encrypt([]byte(req.Plaintext))
@@ -130,7 +130,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		return proto.Response{OK: true, Packed: packed}
 
 	case proto.OpDecrypt:
-		if resp, ok := s.guard(identity, []string{req.Key}, "decrypt"); !ok {
+		if resp, ok := s.guard(identity, []string{req.Key}, "decrypt", req.Reason); !ok {
 			return resp
 		}
 		pt, err := s.store.Decrypt(req.Packed)
@@ -140,7 +140,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		return proto.Response{OK: true, Plaintext: string(pt)}
 
 	case proto.OpDecryptMany:
-		if resp, ok := s.guard(identity, req.Keys, "decryptMany"); !ok {
+		if resp, ok := s.guard(identity, req.Keys, "decryptMany", req.Reason); !ok {
 			return resp
 		}
 		out := make([]string, 0, len(req.PackedMany))
@@ -160,14 +160,24 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 
 // guard runs authorization + audit. Returns (resp,false) when the request must
 // be denied; (zero,true) when it may proceed.
-func (s *Server) guard(identity string, keys []string, op string) (proto.Response, bool) {
+//
+// Audit format:
+//   - DENY lines use cause=<reason-denied> (e.g. cause=unauthorized) — Bob's
+//     own explanation for the deny.
+//   - ALLOW lines use reason=<operator-text> when present — the caller's
+//     "why". Bob never authorizes on reason; it's an audit-only field.
+func (s *Server) guard(identity string, keys []string, op string, reason string) (proto.Response, bool) {
 	for _, k := range keys {
 		if !s.policy.Allowed(identity, k) {
-			s.audit.Printf("DENY  identity=%q op=%s key=%q reason=unauthorized", identity, op, k)
+			s.audit.Printf("DENY  identity=%q op=%s key=%q cause=unauthorized", identity, op, k)
 			return proto.Response{OK: false, Code: proto.CodeUnauthorized, Error: "not authorized for key " + k}, false
 		}
 	}
-	s.audit.Printf("ALLOW identity=%q op=%s keys=%v", identity, op, keys)
+	if reason != "" {
+		s.audit.Printf("ALLOW identity=%q op=%s keys=%v reason=%q", identity, op, keys, reason)
+	} else {
+		s.audit.Printf("ALLOW identity=%q op=%s keys=%v", identity, op, keys)
+	}
 	return proto.Response{}, true
 }
 

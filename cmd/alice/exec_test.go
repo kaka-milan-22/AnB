@@ -557,3 +557,55 @@ func TestAppendAllowEntryWritesAtomicMode(t *testing.T) {
 		t.Fatalf("file mode after append = %o, want 0o600", st.Mode().Perm())
 	}
 }
+
+// TestAllowEntryLabelRoundTrip: a JSON entry with "label" parses, the field
+// is preserved on the in-memory entry, and matching is unaffected by label.
+func TestAllowEntryLabelRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(`{
+  "allow": [
+    {
+      "label": "n9e-login",
+      "cmd":   "/usr/bin/echo",
+      "args":  ["hi"],
+      "env":   ["FOO"]
+    }
+  ]
+}`)
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	if len(list.Allow) != 1 || list.Allow[0].Label != "n9e-login" {
+		t.Fatalf("label not parsed: %+v", list.Allow)
+	}
+	// Match must succeed by (cmd, args, env) regardless of label.
+	hit := matchAllowlist("/usr/bin/echo", []string{"hi"}, []string{"FOO"}, list)
+	if hit == nil {
+		t.Fatal("expected match")
+	}
+	if hit.Label != "n9e-login" {
+		t.Fatalf("matched entry lost label: %+v", hit)
+	}
+}
+
+// TestAllowEntryWithoutLabelStillMatches: legacy entries (no label) still
+// parse and match. Backward compatibility for pre-v2.4 allowlist files.
+func TestAllowEntryWithoutLabelStillMatches(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(`{"allow":[{"cmd":"/usr/bin/echo","args":["x"],"env":[]}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	hit := matchAllowlist("/usr/bin/echo", []string{"x"}, []string{}, list)
+	if hit == nil || hit.Label != "" {
+		t.Fatalf("expected match with empty label, got %+v", hit)
+	}
+}
