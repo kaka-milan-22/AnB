@@ -236,8 +236,10 @@ alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
-# agent-safe exec: env value resolved from vault, plaintext only in child env
-alice exec --env GITHUB_TOKEN=<agent-vault:gh-pat> \
+# agent-safe exec: env value resolved from vault, plaintext only in child env.
+# NOTE: single-quote --env values so the shell doesn't expand `<` / `>` as
+# input/output redirects. bash/zsh/sh all need this.
+alice exec --env 'GITHUB_TOKEN=<agent-vault:gh-pat>' \
   -- curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
 
 # agents use the safe commands — secrets stay redacted
