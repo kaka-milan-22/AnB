@@ -36,6 +36,9 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 		if !envKeyRE.MatchString(name) {
 			return nil, nil, fmt.Errorf("--env %q: KEY %q must match %s", e, name, envKeyRE.String())
 		}
+		if val == "" {
+			return nil, nil, fmt.Errorf("--env %q: VALUE may not be empty (use unset env, or set a literal placeholder like <agent-vault:k>)", e)
+		}
 		entries = append(entries, envEntry{Name: name, Value: val})
 		for _, k := range redact.ExtractPlaceholders(val) {
 			keys[k] = struct{}{}

@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -148,6 +149,16 @@ func TestMergeEnvSkipsMalformedParentEntries(t *testing.T) {
 	// We just need to be sure they don't crash mergeEnv.
 	if len(got) != 4 {
 		t.Fatalf("merged len = %d want 4 (pass-through, no crash); got=%v", len(got), got)
+	}
+}
+
+func TestParseEnvFlagRejectsEmptyValue(t *testing.T) {
+	_, _, err := parseEnvFlag([]string{"KEY="})
+	if err == nil {
+		t.Fatal("expected error for empty VALUE")
+	}
+	if !strings.Contains(err.Error(), "VALUE may not be empty") {
+		t.Fatalf("error message should mention empty VALUE; got: %v", err)
 	}
 }
 
