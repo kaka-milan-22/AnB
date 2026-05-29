@@ -6,15 +6,19 @@
 package e2e
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -221,5 +225,180 @@ func TestPairingEnrollEndToEnd(t *testing.T) {
 	future := time.Now().Add(11 * time.Minute)
 	if err := ca.VerifyPairing(cert, code, future); !errors.Is(err, ca.ErrPairingExpired) {
 		t.Fatalf("expired: got %v want ErrPairingExpired", err)
+	}
+}
+
+// --- alice exec e2e (subprocess) ---
+
+// execHarness holds everything the alice exec subprocess tests need: a running
+// Bob, the alice state directory seeded with cert/key/CA/config, and the path
+// to a freshly-built alice binary. Subprocess invocation is required because
+// cmdExec terminates via syscall.Exec — calling it in-process would kill the
+// test runner.
+type execHarness struct {
+	tmpDir    string
+	aliceDir  string
+	alicePath string
+	cl        *client.Client
+	vault     *localvault.Store
+}
+
+// newExecHarness spins up Bob, mints an Alice identity, writes all disk state
+// the alice subprocess needs, and builds the alice binary. The caller must
+// defer h.cleanup() (but t.Cleanup also covers Bob's listener).
+func newExecHarness(t *testing.T) *execHarness {
+	t.Helper()
+
+	store := unlockedStore(t)
+	b := startBob(t, store, &authz.Policy{DefaultAllow: true})
+
+	tmpDir := t.TempDir()
+	aliceDir := filepath.Join(tmpDir, "alice-state")
+	if err := os.MkdirAll(aliceDir, 0o700); err != nil {
+		t.Fatalf("mkdir aliceDir: %v", err)
+	}
+
+	// Mint a client cert directly via the test CA (no CSR round-trip needed).
+	csrPEM, keyPEM, err := ca.GenerateCSR("e2e-exec-alice")
+	if err != nil {
+		t.Fatalf("GenerateCSR: %v", err)
+	}
+	certPEM, _, err := b.authority.SignCSR(csrPEM, time.Hour)
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+
+	// Write the disk state that loadClient expects.
+	lv := localvault.Open(aliceDir)
+	if err := os.WriteFile(lv.ClientCertPath(), certPEM, 0o600); err != nil {
+		t.Fatalf("write client.crt: %v", err)
+	}
+	if err := os.WriteFile(lv.ClientKeyPath(), keyPEM, 0o600); err != nil {
+		t.Fatalf("write client.key: %v", err)
+	}
+	if err := os.WriteFile(lv.CAPath(), b.authority.CertPEM, 0o600); err != nil {
+		t.Fatalf("write ca.crt: %v", err)
+	}
+	cfg := localvault.Config{
+		BobAddr:    b.addr,
+		ServerName: "localhost",
+		Identity:   "e2e-exec-alice",
+	}
+	cfgBytes, _ := json.Marshal(cfg)
+	if err := os.WriteFile(lv.ConfigPath(), cfgBytes, 0o600); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	// Build an in-process client to seed secrets.
+	cl, err := client.New(b.addr, "localhost", certPEM, keyPEM, b.authority.CertPEM)
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	// Build the alice binary.
+	alicePath := buildAlice(t, tmpDir)
+
+	return &execHarness{
+		tmpDir:    tmpDir,
+		aliceDir:  aliceDir,
+		alicePath: alicePath,
+		cl:        cl,
+		vault:     lv,
+	}
+}
+
+// seedSecret encrypts plaintext via Bob and stores the ciphertext in Alice's
+// vault, mirroring what `alice set` does.
+func (h *execHarness) seedSecret(t *testing.T, key, plaintext string) {
+	t.Helper()
+	packed, err := h.cl.Encrypt(key, plaintext)
+	if err != nil {
+		t.Fatalf("encrypt %q: %v", key, err)
+	}
+	v, _ := h.vault.Load()
+	v.Set(key, localvault.SecretEntry{Value: packed, CreatedAt: "now"})
+	if err := h.vault.Save(v); err != nil {
+		t.Fatalf("vault.Save: %v", err)
+	}
+}
+
+// cleanup is a no-op (t.TempDir already registers cleanup with t.Cleanup).
+func (h *execHarness) cleanup() {}
+
+// buildAlice compiles cmd/alice into dstDir and returns the binary path.
+func buildAlice(t *testing.T, dstDir string) string {
+	t.Helper()
+	// Locate the repo root from this test file's path at compile time.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..")
+
+	alicePath := filepath.Join(dstDir, "alice")
+	cmd := exec.Command("go", "build", "-o", alicePath, "./cmd/alice")
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build alice: %v", err)
+	}
+	return alicePath
+}
+
+func TestAliceExecHappyPath(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	h.seedSecret(t, "smoke-key", "the-secret-value")
+
+	outFile := filepath.Join(h.tmpDir, "exec-out.txt")
+	cmd := exec.Command(h.alicePath,
+		"exec",
+		"--env", "FOO=<agent-vault:smoke-key>",
+		"--",
+		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
+	)
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("alice exec: %v", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read outfile: %v", err)
+	}
+	if string(got) != "the-secret-value" {
+		t.Fatalf("outfile = %q, want %q", string(got), "the-secret-value")
+	}
+}
+
+func TestAliceExecFailClosedOnMissingKey(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	// Do NOT seed the key — alice exec must fail before running the child.
+	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
+	cmd := exec.Command(h.alicePath,
+		"exec",
+		"--env", "FOO=<agent-vault:nonexistent-key>",
+		"--",
+		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
+	)
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected alice exec to fail when --env references a missing key")
+	}
+	// Confirm the child never ran — outfile must not exist.
+	if _, statErr := os.Stat(outFile); !os.IsNotExist(statErr) {
+		t.Fatalf("child should NOT have run; outFile exists or stat error: statErr=%v", statErr)
+	}
+	// Sanity-check: stderr should mention the missing key.
+	if !strings.Contains(stderr.String(), "vault has no key") {
+		t.Logf("stderr was: %s", stderr.String())
+		// Don't Fatal — exit code + missing outfile are the real assertions.
 	}
 }
