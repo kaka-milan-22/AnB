@@ -313,7 +313,10 @@ func cmdExec(args []string) error {
 
 		// TTY-only convenience: offer to append the entry now. Non-TTY
 		// callers (agents, pipes) get the hard-deny exactly as before.
-		if term.StdinIsTTY() {
+		// Require BOTH stdin AND stderr to be TTYs — otherwise the prompt
+		// is invisible (stderr redirected) or unanswerable (stdin piped),
+		// and the operator would be typing into a black hole.
+		if term.StdinIsTTY() && term.IsTTY(os.Stderr) {
 			fmt.Fprintln(os.Stderr, denyMsg)
 			if confirmAppend(os.Stdin, os.Stderr) {
 				entry := allowEntry{
