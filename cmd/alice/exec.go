@@ -31,7 +31,7 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 		}
 		name, val := e[:idx], e[idx+1:]
 		if !envKeyRE.MatchString(name) {
-			return nil, nil, fmt.Errorf("--env %q: KEY %q must match %s", e, name, envKeyRE)
+			return nil, nil, fmt.Errorf("--env %q: KEY %q must match %s", e, name, envKeyRE.String())
 		}
 		entries = append(entries, envEntry{Name: name, Value: val})
 		for _, m := range placeholderRE.FindAllStringSubmatch(val, -1) {
@@ -39,4 +39,30 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 		}
 	}
 	return entries, keys, nil
+}
+
+// mergeEnv builds the env slice for syscall.Exec. resolved entries (the
+// --env values with placeholders restored) come first; parent entries
+// (from os.Environ()) follow, EXCEPT any whose name appears in
+// overridden. Explicit dedup avoids relying on execve(2)'s
+// implementation-defined behavior for duplicate keys (glibc / musl /
+// macOS libc all take the FIRST match via getenv but POSIX does not pin
+// this).
+func mergeEnv(resolved []string, overridden map[string]struct{}, parent []string) []string {
+	out := make([]string, 0, len(resolved)+len(parent))
+	out = append(out, resolved...)
+	for _, kv := range parent {
+		idx := strings.IndexByte(kv, '=')
+		if idx <= 0 {
+			// Malformed entry — preserve verbatim (it's not for us to clean).
+			out = append(out, kv)
+			continue
+		}
+		name := kv[:idx]
+		if _, ok := overridden[name]; ok {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

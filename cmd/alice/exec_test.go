@@ -90,6 +90,67 @@ func TestParseEnvFlagAllowsEqualsInValue(t *testing.T) {
 	}
 }
 
+func TestParseEnvFlagEmptyInput(t *testing.T) {
+	entries, keys, err := parseEnvFlag(nil)
+	if err != nil {
+		t.Fatalf("nil input: err=%v want nil", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("nil input: entries=%v want empty", entries)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("nil input: keys=%v want empty", keys)
+	}
+	// And empty-slice should be equivalent.
+	entries, keys, err = parseEnvFlag([]string{})
+	if err != nil || len(entries) != 0 || len(keys) != 0 {
+		t.Fatalf("empty slice: entries=%v keys=%v err=%v", entries, keys, err)
+	}
+}
+
+func TestMergeEnvResolvedWinsOverParent(t *testing.T) {
+	parent := []string{"PATH=/usr/bin", "API_KEY=oldvalue", "HOME=/h"}
+	resolved := []string{"API_KEY=newvalue", "EXTRA=x"}
+	overridden := map[string]struct{}{"API_KEY": {}, "EXTRA": {}}
+
+	got := mergeEnv(resolved, overridden, parent)
+
+	wantHas := []string{"API_KEY=newvalue", "PATH=/usr/bin", "HOME=/h", "EXTRA=x"}
+	for _, w := range wantHas {
+		found := false
+		for _, g := range got {
+			if g == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("merged env missing %q; got=%v", w, got)
+		}
+	}
+	for _, g := range got {
+		if g == "API_KEY=oldvalue" {
+			t.Fatalf("parent's API_KEY=oldvalue should have been dropped; got=%v", got)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("merged len = %d want 4 (no dups); got=%v", len(got), got)
+	}
+}
+
+func TestMergeEnvSkipsMalformedParentEntries(t *testing.T) {
+	parent := []string{"OKAY=1", "NOEQ", "=valueonly", "ALSO=fine"}
+	resolved := []string{}
+	overridden := map[string]struct{}{}
+	got := mergeEnv(resolved, overridden, parent)
+	// Malformed entries (no '=' or empty name) are passed through unchanged —
+	// alice does not curate the parent env beyond dedup against --env names.
+	// We just need to be sure they don't crash mergeEnv.
+	if len(got) != 4 {
+		t.Fatalf("merged len = %d want 4 (pass-through, no crash); got=%v", len(got), got)
+	}
+}
+
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
