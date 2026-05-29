@@ -39,7 +39,7 @@ func main() {
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
-		"init": cmdInit, "scan": cmdScan,
+		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 	}
 	fn, ok := cmds[os.Args[1]]
@@ -95,6 +95,8 @@ func usage() {
 	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin (human only)")
 	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
 	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
+	fmt.Fprintf(w, row, "template [opts] <src> <dst>", "Render <src>'s placeholders into <dst> with mode/owner (human only)")
+	fmt.Fprintf(w, row, "shell [--env K=V]... [-- shell]", "Sub-shell with --env injected; TTY-only (human only)")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 

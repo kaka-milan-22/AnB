@@ -14,8 +14,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +51,7 @@ func startBob(t *testing.T, store *keystore.Store, policy *authz.Policy) *bob {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	srv := server.New(store, policy, log.New(io.Discard, "", 0))
+	srv := server.New(store, policy, func(kind string, kv ...any) {}) // discard audit in e2e
 	go srv.Serve(ln)
 	return &bob{authority: authority, addr: ln.Addr().String()}
 }

@@ -22,6 +22,7 @@ var (
 	ErrLocked        = errors.New("Bob is locked (operator has not unlocked the master key)")
 	ErrUnauthorized  = errors.New("not authorized for this key")
 	ErrDecryptFailed = errors.New("decrypt failed (wrong vault / corrupted ciphertext)")
+	ErrRateLimited   = errors.New("rate-limited by Bob (too many decrypts per minute)")
 	ErrProtocol      = errors.New("unexpected response from Bob")
 )
 
@@ -82,6 +83,8 @@ func mapErr(resp proto.Response) error {
 		return ErrUnauthorized
 	case proto.CodeDecryptFailed:
 		return ErrDecryptFailed
+	case proto.CodeRateLimit:
+		return ErrRateLimited
 	default:
 		if resp.Error != "" {
 			return errors.New(resp.Error)

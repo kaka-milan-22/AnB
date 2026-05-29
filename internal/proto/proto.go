@@ -20,6 +20,7 @@ const (
 	CodeDecryptFailed = "decrypt-failed" // ciphertext malformed / auth failure
 	CodeBadRequest    = "bad-request"
 	CodeInternal      = "internal"
+	CodeRateLimit     = "rate-limit" // per-identity decrypt rate exceeded (v2.5+)
 )
 
 // Request is one operation. Key/Keys are the logical vault key names (NOT the

@@ -341,6 +341,8 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice import <file> [--min-length N]` | Bulk-import a `.env` file |
 | `alice init` | Initialize an empty local vault |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets |
+| `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s `<agent-vault:k>` placeholders into `<dst>` with explicit mode (default `0600`) and optional ownership. Atomic write. See "Templating" below. |
+| `alice shell [--env K=V]... [--reason R] [-- shell args...]` | Spawn an interactive sub-shell with `--env` (placeholder-restored) injected. TTY-only (no allowlist); sets `ALICE_SHELL=1`. See "Sub-shell" below. |
 
 ### alice — setup
 
@@ -434,13 +436,11 @@ make that log answer **why**, not just *who/when/what*:
 
 ```sh
 alice get reminder-bot-token --reveal --reason "rotating reminder bot creds"
-# bob.log → ALLOW identity="..." op=decrypt keys=[reminder-bot-token] reason="rotating reminder bot creds"
 
 # allowlist entry with "label": "n9e-login":
 alice exec --env N9E_USER='<agent-vault:n9euser>' \
            --env N9E_PASSWORD='<agent-vault:n9epassword>' \
            -- /Users/.../node /Users/.../n9e-auth.js
-# bob.log → ALLOW identity="..." op=decryptMany keys=[...] reason="[n9e-login]"
 ```
 
 **Important: `--reason` is audit-only, not an authorization input.** A
@@ -448,19 +448,129 @@ compromised agent can forge any reason it wants. The value is for the
 *operator* reading the log: anomalous reasons (or expected ones missing) are
 the signal. AnB never gates access on reason content.
 
-Audit format reference (v2.4):
+See "Audit log format" below for the JSON shape these calls produce in
+`bob.log`.
 
-| Line | Tokens |
+---
+
+## Audit log format (v2.5+, JSON one-event-per-line, **breaking from v2.4**)
+
+Every bob log line is a self-contained JSON object — no `audit ` prefix, no
+`log.LstdFlags` timestamp prefix, the timestamp lives **inside** the payload
+as RFC3339Nano `ts`. Designed for Loki / n9e blackbox / Grafana / jq.
+
+Pre-v2.5 consumers that grepped `ALLOW`/`DENY` lines need to switch to JSON
+parsing; this is the v2.5 breaking change.
+
+### Event kinds
+
+| `kind` | Fields |
 |---|---|
-| ALLOW | `identity=` `op=` `keys=` `reason=` *(omitted when empty)* |
-| DENY  | `identity=` `op=` `key=`  `cause=` *(e.g. `cause=unauthorized`)* |
-| HANDSHAKE_FAIL | `remote=` `err=` |
-| DROP  | `identity=` `reason=request-too-large` *(server-emitted cause, not the wire field)* |
+| `ALLOW` | `identity`, `op`, `keys` (array), `reason` (operator-supplied, omitted when empty) |
+| `DENY` | `identity`, `op`, `key`, `cause` (e.g. `"unauthorized"`) |
+| `RATELIMIT` | `identity`, `op`, `cause: "limit-exceeded"` |
+| `HANDSHAKE_FAIL` | `remote`, `err` |
+| `DROP` | `identity`, `cause` (e.g. `"request-too-large"`) |
+| `PANIC` | `err`, `stack` |
+| `SERVING` | `addr`, `dir` |
+| `SHUTDOWN` | — |
+| `AUTOLOCK` | `msg` |
+| `WARN_ALLOW_ALL` | `msg` |
 
-> `cause=` (Bob's reason for denying) was named `reason=` before v2.4. The
-> rename frees `reason=` for the operator-supplied wire field. Pre-v2.4
-> clients that don't send a reason produce ALLOW lines with no `reason=`
-> token at all (backward compatible).
+### `jq` cookbook
+
+```sh
+LOG=~/.anb/bob/bob.log
+
+# the most recent ALLOW with a reason
+jq -c 'select(.kind=="ALLOW" and .reason)' "$LOG" | tail -1
+
+# top 10 identities by decrypt count today
+jq -c 'select(.kind=="ALLOW" and (.op|test("^decrypt"))) | .identity' "$LOG" |
+  sort | uniq -c | sort -rn | head
+
+# rate-limit events in the last hour
+jq -c --argjson cutoff "$(date -u -v-1H +%s)" \
+  'select(.kind=="RATELIMIT") | select((.ts | fromdate) > $cutoff)' "$LOG"
+
+# anything that mentions a specific vault key
+jq -c 'select((.keys // [.key] // []) | index("stripe-key"))' "$LOG"
+```
+
+---
+
+## Rate limiting (v2.5+)
+
+Bob caps each identity's decrypt-class requests (`decrypt` + `decryptMany`).
+Default is **100 ops/minute** (built-in); operators can override per identity
+in `authz.json`. Encrypt and Status are not limited (`encrypt` is operator-TTY
+driven via `alice set`; `status` is cheap).
+
+```json
+{
+  "rules":       { "alice-laptop": ["*"], "agent-ci": ["ci-"] },
+  "rate_limits": {
+    "default":      100,
+    "alice-laptop": 500,
+    "agent-ci":     20
+  }
+}
+```
+
+Resolution: `rate_limits[<identity>]` > `rate_limits.default` > built-in `100`.
+A bucket starts full and refills at `cap/60` tokens/second. Exhausting the
+bucket returns a `rate-limit` response code and emits a `RATELIMIT` audit
+event; bucket state lives in memory and resets on bob restart.
+
+Use this to bound the blast radius of a runaway agent without taking the
+service down. For interactive operators, 100/min is generous; CI / agent
+identities are good candidates for tighter caps.
+
+---
+
+## Templating (`alice template`)
+
+`alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` renders a
+source file's `<agent-vault:k>` placeholders into a destination file with
+explicit permissions. Atomic write (tmp + rename), default mode `0600`. The
+deploy-style sibling of `alice write` (which is stdin-driven).
+
+```sh
+cat > /tmp/myapp.tpl <<'EOF'
+DB_URL=postgres://app:<agent-vault:db-password>@host/myapp
+API_TOKEN=<agent-vault:api-token>
+EOF
+
+alice template /tmp/myapp.tpl /etc/myapp/env --mode 0640 --owner myapp:myapp \
+  --reason "deploy myapp"
+# ✓ Rendered /tmp/myapp.tpl → /etc/myapp/env (2 placeholders restored, mode 0640)
+```
+
+`--owner` typically requires root. Human-only (TTY required) — writes
+plaintext secrets to disk.
+
+---
+
+## Sub-shell (`alice shell`)
+
+`alice shell [--env K=V]... [--reason R] [-- shell-cmd args...]` spawns an
+interactive sub-shell with `--env` values (placeholder-restored) injected,
+plus `ALICE_SHELL=1` so your rc files can change PS1 to mark the session.
+TTY-only (stdin + stderr must both be terminals); no allowlist gate.
+
+```sh
+alice shell --env GH_TOKEN='<agent-vault:gh-pat>'
+# → shell /bin/zsh with env=[GH_TOKEN] (set ALICE_SHELL=1)
+$ echo $ALICE_SHELL
+1
+$ gh api user
+…
+```
+
+Why no allowlist (unlike `alice exec`)? The TTY gate already excludes agents
+structurally — they can't fake a TTY pair — so the allowlist would only add
+friction for the operator who is, by virtue of being at the keyboard, the
+authorization. Audit reason defaults to `[shell]` when `--reason` isn't given.
 
 ---
 

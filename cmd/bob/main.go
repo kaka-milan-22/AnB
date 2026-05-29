@@ -17,7 +17,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -428,15 +427,19 @@ func cmdServe(args []string) error {
 		return err
 	}
 
+	// v2.5+: ALL bob log output is JSON (one event per line, ts in payload).
+	// Create the emitter before authz/keystore so their warnings flow through it.
+	audit := newJSONEmitter(os.Stderr)
+
 	policy, err := authz.OpenOrDefault(filepath.Join(d, "authz.json"))
 	if err != nil {
 		return fmt.Errorf("authz.json: %w", err)
 	}
 	if policy.DefaultAllow {
-		log.Println("⚠ no authz.json — running ALLOW-ALL (every authenticated client may access every key)")
+		audit("WARN_ALLOW_ALL", "msg", "no authz.json — running ALLOW-ALL (every authenticated client may access every key)")
 	}
 
-	store := keystore.New(func() { log.Println("⚠ master key auto-locked (idle TTL); restart serve to unlock") })
+	store := keystore.New(func() { audit("AUTOLOCK", "msg", "master key auto-locked (idle TTL); restart serve to unlock") })
 	store.Hold(mk, time.Duration(*ttl)*time.Second) // store mlocks + owns mk now
 	crypto.Wipe(mk)
 
@@ -450,7 +453,6 @@ func cmdServe(args []string) error {
 	}
 	defer ln.Close()
 
-	audit := log.New(os.Stderr, "audit ", log.LstdFlags|log.LUTC)
 	srv := server.New(store, policy, audit)
 
 	// Clean shutdown: zeroize the key on signal.
@@ -458,12 +460,12 @@ func cmdServe(args []string) error {
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigc
-		log.Println("shutting down, zeroizing key")
+		audit("SHUTDOWN")
 		store.Zeroize()
 		ln.Close()
 	}()
 
-	log.Printf("bob serving mTLS on %s (state %s)", *addr, d)
+	audit("SERVING", "addr", *addr, "dir", d)
 	if err := srv.Serve(ln); err != nil {
 		// listener closed on shutdown is expected
 		if !strings.Contains(err.Error(), "use of closed") {
