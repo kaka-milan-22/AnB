@@ -15,12 +15,13 @@ const (
 // Failure codes (Response.Code) — machine-readable so Alice can map them to
 // distinct UX / exit behavior.
 const (
-	CodeLocked        = "locked"         // Bob holds no key (operator hasn't unlocked)
-	CodeUnauthorized  = "unauthorized"   // identity not allowed this key
-	CodeDecryptFailed = "decrypt-failed" // ciphertext malformed / auth failure
-	CodeBadRequest    = "bad-request"
-	CodeInternal      = "internal"
-	CodeRateLimit     = "rate-limit" // per-identity decrypt rate exceeded (v2.5+)
+	CodeLocked            = "locked"         // Bob holds no key (operator hasn't unlocked)
+	CodeUnauthorized      = "unauthorized"   // identity not allowed this key
+	CodeDecryptFailed     = "decrypt-failed" // ciphertext malformed / auth failure
+	CodeBadRequest        = "bad-request"
+	CodeInternal          = "internal"
+	CodeRateLimit         = "rate-limit"          // per-identity decrypt rate exceeded (v2.5+)
+	CodeUnknownKeyVersion = "unknown-key-version" // ciphertext refers to a finalized K (v2.6+)
 )
 
 // Request is one operation. Key/Keys are the logical vault key names (NOT the
@@ -42,13 +43,21 @@ type Request struct {
 
 // Response is one result. OK gates the payload fields; on failure Code/Error
 // are set.
+//
+// RewrappedPacked / RewrappedPackedMany (v2.6+) carry the same plaintext
+// re-sealed under Bob's CURRENT master key, returned when the request's
+// ciphertext was under an older K version. Alice should write it back to
+// vault.json for opportunistic migration. Empty / nil = no rewrap needed
+// (already on current). Pre-v2.6 alices ignore these fields.
 type Response struct {
-	OK            bool     `json:"ok"`
-	Error         string   `json:"error,omitempty"`
-	Code          string   `json:"code,omitempty"`
-	Packed        string   `json:"packed,omitempty"`
-	Plaintext     string   `json:"plaintext,omitempty"`
-	PlaintextMany []string `json:"plaintextMany,omitempty"`
-	Unlocked      bool     `json:"unlocked,omitempty"`
-	TTLRemaining  int      `json:"ttlRemaining,omitempty"`
+	OK                  bool     `json:"ok"`
+	Error               string   `json:"error,omitempty"`
+	Code                string   `json:"code,omitempty"`
+	Packed              string   `json:"packed,omitempty"`
+	Plaintext           string   `json:"plaintext,omitempty"`
+	PlaintextMany       []string `json:"plaintextMany,omitempty"`
+	RewrappedPacked     string   `json:"rewrappedPacked,omitempty"`
+	RewrappedPackedMany []string `json:"rewrappedPackedMany,omitempty"`
+	Unlocked            bool     `json:"unlocked,omitempty"`
+	TTLRemaining        int      `json:"ttlRemaining,omitempty"`
 }

@@ -151,11 +151,14 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		if resp, ok := s.guard(identity, []string{req.Key}, "decrypt", req.Reason); !ok {
 			return resp
 		}
-		pt, err := s.store.Decrypt(req.Packed)
+		pt, rewrapped, _, err := s.store.Decrypt(req.Packed)
 		if err != nil {
 			return cryptoErr(err)
 		}
-		return proto.Response{OK: true, Plaintext: string(pt)}
+		if rewrapped != "" {
+			s.audit("KEY_REWRAP", "identity", identity, "op", "decrypt", "key", req.Key, "count", 1)
+		}
+		return proto.Response{OK: true, Plaintext: string(pt), RewrappedPacked: rewrapped}
 
 	case proto.OpDecryptMany:
 		if resp, ok := s.rateLimit(identity, "decryptMany"); !ok {
@@ -164,15 +167,27 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		if resp, ok := s.guard(identity, req.Keys, "decryptMany", req.Reason); !ok {
 			return resp
 		}
-		out := make([]string, 0, len(req.PackedMany))
-		for _, p := range req.PackedMany {
-			pt, err := s.store.Decrypt(p)
+		pts := make([]string, 0, len(req.PackedMany))
+		rewraps := make([]string, len(req.PackedMany))
+		rewrapCount := 0
+		for i, p := range req.PackedMany {
+			pt, rewrapped, _, err := s.store.Decrypt(p)
 			if err != nil {
 				return cryptoErr(err)
 			}
-			out = append(out, string(pt))
+			pts = append(pts, string(pt))
+			rewraps[i] = rewrapped
+			if rewrapped != "" {
+				rewrapCount++
+			}
 		}
-		return proto.Response{OK: true, PlaintextMany: out}
+		if rewrapCount > 0 {
+			s.audit("KEY_REWRAP", "identity", identity, "op", "decryptMany", "keys", req.Keys, "count", rewrapCount)
+		} else {
+			// All on current; suppress the rewrap-many field entirely (omitempty).
+			rewraps = nil
+		}
+		return proto.Response{OK: true, PlaintextMany: pts, RewrappedPackedMany: rewraps}
 
 	default:
 		return proto.Response{OK: false, Code: proto.CodeBadRequest, Error: "unknown op: " + req.Op}
@@ -215,6 +230,9 @@ func (s *Server) guard(identity string, keys []string, op, reason string) (proto
 func cryptoErr(err error) proto.Response {
 	if errors.Is(err, keystore.ErrLocked) {
 		return proto.Response{OK: false, Code: proto.CodeLocked, Error: "vault is locked"}
+	}
+	if errors.Is(err, keystore.ErrUnknownVersion) {
+		return proto.Response{OK: false, Code: proto.CodeUnknownKeyVersion, Error: "ciphertext references a finalized key version"}
 	}
 	return proto.Response{OK: false, Code: proto.CodeDecryptFailed, Error: "operation failed"}
 }

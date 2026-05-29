@@ -96,9 +96,12 @@ func cmdWrite(args []string) error {
 		if err != nil {
 			return err
 		}
-		pts, err := cl.DecryptMany(keys, packed)
+		pts, rewraps, err := cl.DecryptMany(keys, packed)
 		if err != nil {
 			return err
+		}
+		if _, werr := applyRewraps(s, keys, rewraps); werr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to write back rewrapped entries: %v\n", werr)
 		}
 		for i := range keys {
 			resolved[keys[i]] = pts[i]

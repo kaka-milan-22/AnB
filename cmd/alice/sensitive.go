@@ -161,9 +161,14 @@ func cmdGet(args []string) error {
 			return err
 		}
 		cl.SetReason(*reason)
-		pt, err := cl.Decrypt(key, e.Value)
+		pt, rewrapped, err := cl.Decrypt(key, e.Value)
 		if err != nil {
 			return err
+		}
+		if rewrapped != "" {
+			if _, werr := applyRewraps(s, []string{key}, []string{rewrapped}); werr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to write back rewrapped entry %q: %v\n", key, werr)
+			}
 		}
 		fmt.Println(pt)
 		return nil

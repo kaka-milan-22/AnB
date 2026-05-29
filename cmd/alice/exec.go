@@ -388,9 +388,12 @@ func cmdExec(args []string) error {
 			reason = "[" + matched.Label + "]"
 		}
 		cl.SetReason(reason)
-		pts, derr := cl.DecryptMany(keys, packed)
+		pts, rewraps, derr := cl.DecryptMany(keys, packed)
 		if derr != nil {
 			return derr
+		}
+		if _, werr := applyRewraps(s, keys, rewraps); werr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to write back rewrapped entries: %v\n", werr)
 		}
 		for i, k := range keys {
 			plaintexts[k] = pts[i]
