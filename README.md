@@ -61,12 +61,14 @@ request against it (like Kubernetes client-cert auth).
   for agents without a TTY; sensitive commands (`set`/`get --reveal`/…) require an
   interactive terminal, so an agent (even under prompt injection) structurally
   cannot exfiltrate plaintext.
-- **Agent-safe exec** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
-  resolves vault placeholders into the child's env and `syscall.Exec`s the
-  child. The alice process disappears; plaintext never reaches alice's own
-  stdout. Argv-side placeholders are explicitly disallowed (Linux
-  `/proc/<pid>/cmdline` is world-readable). Companion: `alice write --quiet`
-  now routes status lines to stderr.
+- **Agent-safe exec (operator-allowlisted)** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
+  is default-deny since v2.0.0. Operator pre-blesses exact
+  (cmd, args, env_keys) triples in `~/.anb/alice/exec-allowlist.json`.
+  Matched invocations resolve placeholders into the child's env and
+  `syscall.Exec` the child without further prompting (agent-autonomous);
+  any change to the triple — including whitespace, arg order, or env
+  names — requires a new entry. Companion: `alice write --quiet`
+  routes status lines to stderr.
 - **Mutual TLS with a private CA** — no public CA, no ACME. Bob mints its own CA,
   server cert, and signs each client's CSR. Runs over any network (LAN, VPN,
   internet).
@@ -103,6 +105,15 @@ protect the endpoints:
   past `install-cert` entirely) or on Bob (who can mint anything). 8 decimal
   digits ≈ 26.6 bits — enough for one-shot OOB inside a 10-minute window, not
   enough to lean on as a credential.
+- **`alice exec` env values are same-uid visible.** Resolved plaintexts
+  reach the child via env vars; same-uid processes can read them via
+  `/proc/<pid>/environ` (Linux, 0o400 owner-only — i.e. same uid + root)
+  or `ps eww` (macOS). This is strictly stronger than argv (Linux
+  `/proc/<pid>/cmdline` is world-readable 0o644) but is NOT a
+  memory-only channel. The allowlist limits *which* (cmd, args, env)
+  triples can run, not what those processes do once running — the
+  trust boundary is "alice + the operator-blessed binaries + same-uid
+  process access".
 
 ---
 
@@ -112,16 +123,16 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-go install github.com/kaka-milan-22/AnB/cmd/bob@v1.4.0
-go install github.com/kaka-milan-22/AnB/cmd/alice@v1.4.0
+go install github.com/kaka-milan-22/AnB/cmd/bob@v2.0.0
+go install github.com/kaka-milan-22/AnB/cmd/alice@v2.0.0
 
-# …or build from a local clone of the v1.4.0 tag
-git clone --branch v1.4.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v2.0.0 tag
+git clone --branch v2.0.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v1.4.0` with `@latest` to track unreleased changes on `main`.
+Replace `v2.0.0` with `@latest` to track unreleased changes on `main`.
 
 ---
 
@@ -236,11 +247,15 @@ alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
-# agent-safe exec: env value resolved from vault, plaintext only in child env.
-# NOTE: single-quote --env values so the shell doesn't expand `<` / `>` as
-# input/output redirects. bash/zsh/sh all need this.
-alice exec --env 'GITHUB_TOKEN=<agent-vault:gh-pat>' \
-  -- curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+# v2.0.0+: alice exec is default-deny via ~/.anb/alice/exec-allowlist.json.
+# `alice enroll` scaffolds an empty {"allow":[]} for you. To allow a new
+# invocation: run it once, copy the suggested JSON from the deny error
+# into allow[], re-run. Then subsequent identical calls go through
+# without further prompting.
+#
+# NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
+alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
+  -- /opt/homebrew/bin/gh api user
 
 # agents use the safe commands — secrets stay redacted
 alice read config.yaml           # secret values → <agent-vault:key>
@@ -295,7 +310,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
 | `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
 | `alice status` | Enrollment + Bob reachability/unlock state |
-| `alice exec [--env KEY=V]... -- <cmd> [args...]` | Resolve `<agent-vault:k>` in `--env` values, then `syscall.Exec` the child. Plaintext never on alice's stdout. |
+| `alice exec [--env KEY=V]... -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.json`; on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see Authorization / allowlist sections for the JSON schema. |
 
 ### alice — sensitive (human only, TTY required)
 
@@ -408,12 +423,14 @@ locked refusal) against a real Bob over mTLS.
 
 ## Status & roadmap
 
-v1 is functional. Not yet implemented (planned):
+v2 is functional. Not yet implemented (planned):
 
-- Bob KEK sealed to a TPM / cloud KMS for unattended restart (v1 unlocks with an
-  operator master password).
+- Bob KEK sealed to a TPM / cloud KMS for unattended restart (v2 still
+  unlocks with an operator master password).
 - Alice's client key on hardware (PKCS#11 / Secure Enclave).
 - Certificate revocation lists / short-lived client certs.
+- `alice exec` allowlist patterns: wildcards / regex / args-prefix matching
+  (v2 is strict byte-for-byte; per-entry patterns are a future iteration).
 
 ---
 

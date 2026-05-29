@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -151,6 +155,16 @@ func TestMergeEnvSkipsMalformedParentEntries(t *testing.T) {
 	}
 }
 
+func TestParseEnvFlagRejectsEmptyValue(t *testing.T) {
+	_, _, err := parseEnvFlag([]string{"KEY="})
+	if err == nil {
+		t.Fatal("expected error for empty VALUE")
+	}
+	if !strings.Contains(err.Error(), "VALUE may not be empty") {
+		t.Fatalf("error message should mention empty VALUE; got: %v", err)
+	}
+}
+
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -158,4 +172,239 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func TestLoadAllowlistAcceptsValid(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"allow": [
+			{"cmd": "/usr/bin/echo", "args": ["hello"], "env": []},
+			{"cmd": "/opt/homebrew/bin/gh", "args": ["api", "user"], "env": ["GH_TOKEN"]}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	if len(list.Allow) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(list.Allow))
+	}
+	if list.Allow[0].Cmd != "/usr/bin/echo" {
+		t.Fatalf("entry 0 cmd = %q", list.Allow[0].Cmd)
+	}
+	if !reflect.DeepEqual(list.Allow[1].Args, []string{"api", "user"}) {
+		t.Fatalf("entry 1 args = %v", list.Allow[1].Args)
+	}
+	if !reflect.DeepEqual(list.Allow[1].Env, []string{"GH_TOKEN"}) {
+		t.Fatalf("entry 1 env = %v", list.Allow[1].Env)
+	}
+}
+
+func TestLoadAllowlistReturnsSpecificErrorWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !errors.Is(err, errAllowlistMissing) {
+		t.Fatalf("want errAllowlistMissing, got %v", err)
+	}
+}
+
+func TestLoadAllowlistRejectsMalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+}
+
+func TestLoadAllowlistRejectsUnknownTopLevelField(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"deny":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown top-level field")
+	}
+}
+
+func TestLoadAllowlistRejectsUnknownEntryField(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"/usr/bin/echo","args":["x"],"env":[],"extra":"oops"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown entry field")
+	}
+}
+
+func TestLoadAllowlistRejectsNonAbsoluteCmd(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"curl","args":["x"],"env":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for non-absolute cmd")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error should mention 'absolute'; got: %v", err)
+	}
+}
+
+func TestLoadAllowlistRejectsBadEnvName(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"/usr/bin/echo","args":[],"env":["1bad"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for bad env name")
+	}
+}
+
+func TestLoadAllowlistRejectsMissingCmd(t *testing.T) {
+	dir := t.TempDir()
+	// cmd field omitted entirely; Go zero-values it to "".
+	body := `{"allow":[{"args":["x"],"env":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for missing cmd field")
+	}
+	if !strings.Contains(err.Error(), "missing or empty") {
+		t.Fatalf("error should call out missing/empty cmd; got: %v", err)
+	}
+}
+
+func TestLoadAllowlistAcceptsEmptyAllow(t *testing.T) {
+	// {"allow":[]} is the scaffolded default; must parse cleanly so cmdExec
+	// can hand it to matchAllowlist (which returns nil for any invocation).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist on empty allow: %v", err)
+	}
+	if len(list.Allow) != 0 {
+		t.Fatalf("expected empty Allow, got %v", list.Allow)
+	}
+}
+
+func TestMatchAllowlistExactEquality(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"hello"}, Env: []string{}},
+		{Cmd: "/opt/homebrew/bin/gh", Args: []string{"api", "user"}, Env: []string{"GH_TOKEN"}},
+	}}
+	hit := matchAllowlist("/opt/homebrew/bin/gh", []string{"api", "user"}, []string{"GH_TOKEN"}, list)
+	if hit == nil {
+		t.Fatal("expected match for gh api user")
+	}
+	if hit.Cmd != "/opt/homebrew/bin/gh" {
+		t.Fatalf("matched wrong entry: %+v", hit)
+	}
+}
+
+func TestMatchAllowlistRejectsExtraSpaceInArg(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"hello"}, Env: []string{}},
+	}}
+	hit := matchAllowlist("/usr/bin/echo", []string{"hello "}, []string{}, list)
+	if hit != nil {
+		t.Fatalf("trailing space in arg should not match: %+v", hit)
+	}
+}
+
+func TestMatchAllowlistRejectsDifferentArgOrder(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/git", Args: []string{"push", "origin", "main"}, Env: []string{}},
+	}}
+	hit := matchAllowlist("/usr/bin/git", []string{"push", "main", "origin"}, []string{}, list)
+	if hit != nil {
+		t.Fatal("swapped arg positions should not match")
+	}
+}
+
+func TestMatchAllowlistRejectsLengthMismatch(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"a", "b"}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/echo", []string{"a"}, []string{}, list) != nil {
+		t.Fatal("shorter args should not match")
+	}
+	if matchAllowlist("/usr/bin/echo", []string{"a", "b", "c"}, []string{}, list) != nil {
+		t.Fatal("longer args should not match")
+	}
+}
+
+func TestMatchAllowlistEnvKeysAreSetEqual(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{}, Env: []string{"A", "B"}},
+	}}
+	// invocation has same names in different order → matches
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"B", "A"}, list) == nil {
+		t.Fatal("env order should not matter")
+	}
+	// extra env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A", "B", "C"}, list) != nil {
+		t.Fatal("extra env key should not match")
+	}
+	// missing env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A"}, list) != nil {
+		t.Fatal("missing env key should not match")
+	}
+	// renamed env key → no match
+	if matchAllowlist("/usr/bin/echo", []string{}, []string{"A", "C"}, list) != nil {
+		t.Fatal("renamed env key should not match")
+	}
+}
+
+func TestMatchAllowlistNoWildcards(t *testing.T) {
+	// A literal "*" in an entry should match ONLY a literal "*" in the
+	// invocation — not act as a wildcard.
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"*"}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/echo", []string{"anything"}, []string{}, list) != nil {
+		t.Fatal("literal '*' must not act as wildcard")
+	}
+	if matchAllowlist("/usr/bin/echo", []string{"*"}, []string{}, list) == nil {
+		t.Fatal("literal '*' should match literal '*'")
+	}
+}
+
+func TestMatchAllowlistFirstMatchInFileOrderWins(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/echo", Args: []string{"x"}, Env: []string{}},
+		{Cmd: "/usr/bin/echo", Args: []string{"x"}, Env: []string{}}, // duplicate
+	}}
+	hit := matchAllowlist("/usr/bin/echo", []string{"x"}, []string{}, list)
+	if hit != &list.Allow[0] {
+		t.Fatal("first match should win")
+	}
+}
+
+func TestMatchAllowlistEmptyArgsAndEnv(t *testing.T) {
+	list := &allowlist{Allow: []allowEntry{
+		{Cmd: "/usr/bin/true", Args: []string{}, Env: []string{}},
+	}}
+	if matchAllowlist("/usr/bin/true", []string{}, []string{}, list) == nil {
+		t.Fatal("empty args+env should match an empty-args+empty-env entry")
+	}
 }
