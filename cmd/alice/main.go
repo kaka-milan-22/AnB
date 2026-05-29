@@ -9,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -44,14 +45,19 @@ func main() {
 		usage()
 	}
 	if err := fn(os.Args[2:]); err != nil {
-		// Errors whose message starts with "✓ " are intentional non-zero
-		// exits with a success-marker (e.g. alice exec auto-append asks
-		// the operator to re-run). Print without the ✗ wrapping but keep
-		// the non-zero exit so script chains do not proceed as if the
-		// child ran.
-		if msg := err.Error(); strings.HasPrefix(msg, "✓ ") {
-			fmt.Fprintln(os.Stderr, msg)
-		} else {
+		// errExecDenied: caller (cmdExec TTY-confirm path) already
+		// printed the deny output before reading the prompt. Exit
+		// non-zero silently — no second print.
+		// "✓ " prefix: intentional non-zero exit with a success-marker
+		// (alice exec auto-append asks the operator to re-run). Print
+		// without the ✗ wrapping but keep the non-zero exit so script
+		// chains do not proceed as if the child ran.
+		switch {
+		case errors.Is(err, errExecDenied):
+			// silent
+		case strings.HasPrefix(err.Error(), "✓ "):
+			fmt.Fprintln(os.Stderr, err.Error())
+		default:
 			fmt.Fprintf(os.Stderr, "✗ %v\n", err)
 		}
 		os.Exit(1)

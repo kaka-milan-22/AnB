@@ -97,6 +97,14 @@ type allowlist struct {
 // instead of a generic file-not-found error.
 var errAllowlistMissing = errors.New("exec-allowlist.json not found")
 
+// errExecDenied signals "operator declined the TTY confirm-and-append
+// prompt; the deny output was already printed before the prompt, so
+// do not print anything else". The dispatcher in main.go recognizes
+// this sentinel and exits non-zero silently. Without it, the
+// dispatcher would re-print the deny message a second time after the
+// operator had already read it once.
+var errExecDenied = errors.New("alice exec: declined")
+
 // loadAllowlist reads and validates exec-allowlist.json from the given
 // state dir. Returns errAllowlistMissing if the file does not exist.
 // Validates each entry: cmd must be an absolute path, env names must
@@ -330,6 +338,10 @@ func cmdExec(args []string) error {
 				return fmt.Errorf("✓ appended entry to %s/exec-allowlist.json — re-run your command to execute it",
 					s.Dir)
 			}
+			// Operator declined — denyMsg already on stderr (above), so
+			// return the silent sentinel: dispatcher exits non-zero
+			// without printing a second copy of the deny output.
+			return errExecDenied
 		}
 
 		return errors.New(denyMsg)
