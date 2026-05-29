@@ -61,6 +61,12 @@ request against it (like Kubernetes client-cert auth).
   for agents without a TTY; sensitive commands (`set`/`get --reveal`/…) require an
   interactive terminal, so an agent (even under prompt injection) structurally
   cannot exfiltrate plaintext.
+- **Agent-safe exec** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
+  resolves vault placeholders into the child's env and `syscall.Exec`s the
+  child. The alice process disappears; plaintext never reaches alice's own
+  stdout. Argv-side placeholders are explicitly disallowed (Linux
+  `/proc/<pid>/cmdline` is world-readable). Companion: `alice write --quiet`
+  now routes status lines to stderr.
 - **Mutual TLS with a private CA** — no public CA, no ACME. Bob mints its own CA,
   server cert, and signs each client's CSR. Runs over any network (LAN, VPN,
   internet).
@@ -106,16 +112,16 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-go install github.com/kaka-milan-22/AnB/cmd/bob@v1.3.2
-go install github.com/kaka-milan-22/AnB/cmd/alice@v1.3.2
+go install github.com/kaka-milan-22/AnB/cmd/bob@v1.4.0
+go install github.com/kaka-milan-22/AnB/cmd/alice@v1.4.0
 
-# …or build from a local clone of the v1.3.2 tag
-git clone --branch v1.3.2 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v1.4.0 tag
+git clone --branch v1.4.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v1.3.2` with `@latest` to track unreleased changes on `main`.
+Replace `v1.4.0` with `@latest` to track unreleased changes on `main`.
 
 ---
 
@@ -230,6 +236,12 @@ alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
+# agent-safe exec: env value resolved from vault, plaintext only in child env.
+# NOTE: single-quote --env values so the shell doesn't expand `<` / `>` as
+# input/output redirects. bash/zsh/sh all need this.
+alice exec --env 'GITHUB_TOKEN=<agent-vault:gh-pat>' \
+  -- curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+
 # agents use the safe commands — secrets stay redacted
 alice read config.yaml           # secret values → <agent-vault:key>
 echo 'token: <agent-vault:stripe-key>' | alice write config.yaml
@@ -279,10 +291,11 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | Command | Description |
 |---|---|
 | `alice read <file>` | Print the file with secrets redacted |
-| `alice write <file> [--content C]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
+| `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`). Status lines go to stderr; `--quiet` suppresses them. |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
 | `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
 | `alice status` | Enrollment + Bob reachability/unlock state |
+| `alice exec [--env KEY=V]... -- <cmd> [args...]` | Resolve `<agent-vault:k>` in `--env` values, then `syscall.Exec` the child. Plaintext never on alice's stdout. |
 
 ### alice — sensitive (human only, TTY required)
 

@@ -3,7 +3,7 @@
 // encrypt/decrypt. Command surface mirrors agent-vault 0.5, including the
 // safe/sensitive TTY split that structurally keeps agents out of plaintext.
 //
-//	safe (agent + human):     read  write  has  list  status
+//	safe (agent + human):     read  write  has  list  status  exec
 //	sensitive (human, TTY):   set  get  rm  import  init  scan
 //	setup:                    enroll  install-cert
 package main
@@ -29,7 +29,7 @@ func main() {
 		usage()
 	}
 	cmds := map[string]func([]string) error{
-		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus,
+		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
 		"init": cmdInit, "scan": cmdScan,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
@@ -64,6 +64,7 @@ func usage() {
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
 	fmt.Fprintf(w, row, "list [options]", "List all stored secret key names (safe for agents)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
+	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
 	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret value, or --generate one (interactive, human only)")
 	fmt.Fprintf(w, row, "get [options] <key>", "View secret metadata or value (human only)")
 	fmt.Fprintf(w, row, "rm <key>", "Remove a secret from the vault (human only)")
