@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -406,5 +407,52 @@ func TestMatchAllowlistEmptyArgsAndEnv(t *testing.T) {
 	}}
 	if matchAllowlist("/usr/bin/true", []string{}, []string{}, list) == nil {
 		t.Fatal("empty args+env should match an empty-args+empty-env entry")
+	}
+}
+
+func TestConfirmAppendAcceptsYes(t *testing.T) {
+	for _, input := range []string{"yes\n", "YES\n", "Yes\n", "  yes  \n", "yes"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if !got {
+			t.Fatalf("input %q: want true, got false (prompt was: %q)", input, out.String())
+		}
+	}
+}
+
+func TestConfirmAppendRejectsY(t *testing.T) {
+	// Single 'y' is intentionally NOT accepted — operator must type full word.
+	for _, input := range []string{"y\n", "Y\n", " y\n"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if got {
+			t.Fatalf("input %q: want false (only 'yes' is accepted), got true", input)
+		}
+	}
+}
+
+func TestConfirmAppendDefaultsToNo(t *testing.T) {
+	// Empty input (just Enter), no input, and any other non-"yes" string
+	// all return false. Note: "yes\nmore\n" is NOT included here because
+	// bufio.ReadString('\n') reads only the first line ("yes\n"), so the
+	// result is true — consistent with the spec implementation.
+	for _, input := range []string{"\n", "", "no\n", "yes please\n"} {
+		var out bytes.Buffer
+		got := confirmAppend(strings.NewReader(input), &out)
+		if got {
+			t.Fatalf("input %q: want false (default N), got true", input)
+		}
+	}
+}
+
+func TestConfirmAppendPrintsPrompt(t *testing.T) {
+	var out bytes.Buffer
+	_ = confirmAppend(strings.NewReader("no\n"), &out)
+	prompt := out.String()
+	if !strings.Contains(prompt, "yes") {
+		t.Fatalf("prompt should mention 'yes' as the confirmation word; got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "[y/N]") && !strings.Contains(prompt, "yes/N") {
+		t.Fatalf("prompt should display the default-N hint; got: %q", prompt)
 	}
 }

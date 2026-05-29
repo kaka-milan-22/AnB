@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -363,4 +365,16 @@ func cmdExec(args []string) error {
 	fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
 
 	return syscall.Exec(cmdPath, childArgv, merged)
+}
+
+// confirmAppend prints a "type 'yes' to confirm" prompt to out and reads
+// one line from in. Returns true iff the trimmed-lowercase input is
+// exactly "yes" — a single "y" does NOT count, deliberately, because the
+// caller's next action (appending to the allowlist + signalling
+// "operator approved") deserves two friction characters more than the
+// reflex-key "y".
+func confirmAppend(in io.Reader, out io.Writer) bool {
+	fmt.Fprint(out, "\nAppend this entry to exec-allowlist.json? Type 'yes' to confirm [y/N]: ")
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	return strings.ToLower(strings.TrimSpace(line)) == "yes"
 }
