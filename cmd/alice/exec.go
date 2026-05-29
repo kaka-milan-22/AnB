@@ -15,6 +15,7 @@ import (
 
 	"github.com/kaka-milan-22/AnB/internal/localvault"
 	"github.com/kaka-milan-22/AnB/internal/redact"
+	"github.com/kaka-milan-22/AnB/internal/term"
 )
 
 // envEntry is one parsed --env flag: a POSIX env name and its (possibly
@@ -293,7 +294,7 @@ func cmdExec(args []string) error {
 	}
 
 	if matchAllowlist(cmdName, childArgs, envNames, list) == nil {
-		return fmt.Errorf("alice exec: invocation not in allowlist.\n\n"+
+		denyMsg := fmt.Sprintf("alice exec: invocation not in allowlist.\n\n"+
 			"  cmd:  %s\n"+
 			"  args: %s\n"+
 			"  env:  %s\n\n"+
@@ -309,6 +310,26 @@ func cmdExec(args []string) error {
 			mustMarshalJSON(sortedStringSlice(envNames)),
 			s.Dir,
 			formatDenyJSON(cmdName, childArgs, envNames))
+
+		// TTY-only convenience: offer to append the entry now. Non-TTY
+		// callers (agents, pipes) get the hard-deny exactly as before.
+		if term.StdinIsTTY() {
+			fmt.Fprintln(os.Stderr, denyMsg)
+			if confirmAppend(os.Stdin, os.Stderr) {
+				entry := allowEntry{
+					Cmd:  cmdName,
+					Args: childArgs,
+					Env:  sortedStringSlice(envNames),
+				}
+				if err := appendAllowEntry(s.Dir, entry); err != nil {
+					return fmt.Errorf("append allowlist entry: %w", err)
+				}
+				return fmt.Errorf("✓ appended entry to %s/exec-allowlist.json — re-run your command to execute it",
+					s.Dir)
+			}
+		}
+
+		return errors.New(denyMsg)
 	}
 
 	// Past the gate — proceed with vault lookup, decrypt, restore, exec.

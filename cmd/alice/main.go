@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/kaka-milan-22/AnB/internal/client"
 	"github.com/kaka-milan-22/AnB/internal/localvault"
@@ -43,7 +44,16 @@ func main() {
 		usage()
 	}
 	if err := fn(os.Args[2:]); err != nil {
-		fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+		// Errors whose message starts with "✓ " are intentional non-zero
+		// exits with a success-marker (e.g. alice exec auto-append asks
+		// the operator to re-run). Print without the ✗ wrapping but keep
+		// the non-zero exit so script chains do not proceed as if the
+		// child ran.
+		if msg := err.Error(); strings.HasPrefix(msg, "✓ ") {
+			fmt.Fprintln(os.Stderr, msg)
+		} else {
+			fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
