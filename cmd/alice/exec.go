@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"syscall"
 
@@ -19,14 +18,12 @@ type envEntry struct {
 	Value string
 }
 
-// placeholderRE matches <agent-vault:KEY> exactly like internal/redact's
-// private regex. Re-declared here so cmd/alice can extract referenced keys
-// without exporting the redact regex.
-var placeholderRE = regexp.MustCompile(`<agent-vault:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)>`)
-
 // parseEnvFlag validates each raw --env entry (KEY=VALUE form, POSIX KEY)
 // and collects the set of vault keys referenced via <agent-vault:k>
 // placeholders in any VALUE. Pure function — no I/O, no decryption.
+// Delegates placeholder extraction to redact.ExtractPlaceholders so the
+// regex lives in one place (no risk of drift if the placeholder grammar
+// ever changes).
 func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 	entries := make([]envEntry, 0, len(raw))
 	keys := make(map[string]struct{})
@@ -40,8 +37,8 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 			return nil, nil, fmt.Errorf("--env %q: KEY %q must match %s", e, name, envKeyRE.String())
 		}
 		entries = append(entries, envEntry{Name: name, Value: val})
-		for _, m := range placeholderRE.FindAllStringSubmatch(val, -1) {
-			keys[m[1]] = struct{}{}
+		for _, k := range redact.ExtractPlaceholders(val) {
+			keys[k] = struct{}{}
 		}
 	}
 	return entries, keys, nil
