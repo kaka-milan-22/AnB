@@ -113,9 +113,15 @@ protect the endpoints:
   memory-only channel. The allowlist limits *which* (cmd, args, env)
   triples can run, not what those processes do once running — the
   trust boundary is "alice + the operator-blessed binaries + same-uid
-  process access". The TTY confirm-and-append flow added in v2.1 is
-  operator-only — agents and pipes never reach the prompt, so the
-  allowlist can only be widened by a human at the terminal.
+  process access". The TTY confirm-and-append flow added in v2.1
+  gates on `isatty(stdin) && isatty(stderr)` — agents and pipes (the
+  common case) never reach the prompt, so the allowlist cannot be
+  widened from typical agent harnesses. An agent that explicitly
+  allocates a pty (e.g. `expect`, `pty.spawn`, an agent driving
+  tmux/screen) WOULD pass the gate and could send `yes\n`; if your
+  agent runtime owns a pty, treat the prompt as "anyone with this
+  TTY can widen the allowlist" and gate the binary itself, not just
+  AnB.
 
 ---
 

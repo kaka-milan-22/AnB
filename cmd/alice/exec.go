@@ -409,6 +409,13 @@ func cmdExec(args []string) error {
 // file does not exist — callers should not attempt to "create + append"
 // because the missing file is itself an operator-deliberate state
 // (default-deny scaffold; see cmdEnroll).
+//
+// NOTE: no file lock. Two simultaneous alice exec invocations that
+// both reach the TTY-confirm path could race on the read-modify-write
+// — one append would overwrite the other's snapshot, dropping that
+// entry. AnB is single-operator by design (one human at the keyboard);
+// the race window is the human typing "yes" in two terminals at the
+// same moment. If that becomes a real scenario, swap to flock(2).
 func appendAllowEntry(dir string, entry allowEntry) error {
 	list, err := loadAllowlist(dir)
 	if err != nil {
