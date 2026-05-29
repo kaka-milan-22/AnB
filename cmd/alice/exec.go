@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -71,6 +74,59 @@ func mergeEnv(resolved []string, overridden map[string]struct{}, parent []string
 		out = append(out, kv)
 	}
 	return out
+}
+
+// allowEntry is one strict-match entry in the alice exec allowlist.
+type allowEntry struct {
+	Cmd  string   `json:"cmd"`
+	Args []string `json:"args"`
+	Env  []string `json:"env"`
+}
+
+// allowlist is the on-disk shape of ~/.anb/alice/exec-allowlist.json.
+type allowlist struct {
+	Allow []allowEntry `json:"allow"`
+}
+
+// errAllowlistMissing is returned by loadAllowlist when the file does
+// not exist. cmdExec catches this to print the dedicated init hint
+// instead of a generic file-not-found error.
+var errAllowlistMissing = errors.New("exec-allowlist.json not found")
+
+// loadAllowlist reads and validates exec-allowlist.json from the given
+// state dir. Returns errAllowlistMissing if the file does not exist.
+// Validates each entry: cmd must be an absolute path, env names must
+// match POSIX env-var syntax. Strict JSON parsing (DisallowUnknownFields)
+// so typos like "cmm:" or "arsg:" fail loud at load time.
+func loadAllowlist(dir string) (*allowlist, error) {
+	path := filepath.Join(dir, "exec-allowlist.json")
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errAllowlistMissing
+		}
+		return nil, fmt.Errorf("exec-allowlist.json: %w", err)
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	dec.DisallowUnknownFields()
+	var list allowlist
+	if err := dec.Decode(&list); err != nil {
+		return nil, fmt.Errorf("exec-allowlist.json: %w", err)
+	}
+
+	for i, e := range list.Allow {
+		if !filepath.IsAbs(e.Cmd) {
+			return nil, fmt.Errorf("exec-allowlist.json: entry %d cmd %q must be an absolute path", i, e.Cmd)
+		}
+		for _, n := range e.Env {
+			if !envKeyRE.MatchString(n) {
+				return nil, fmt.Errorf("exec-allowlist.json: entry %d env name %q must match %s", i, n, envKeyRE.String())
+			}
+		}
+	}
+	return &list, nil
 }
 
 // envFlagValue is a flag.Value that accumulates repeated --env occurrences.

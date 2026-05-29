@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -169,4 +172,105 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func TestLoadAllowlistAcceptsValid(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"allow": [
+			{"cmd": "/usr/bin/echo", "args": ["hello"], "env": []},
+			{"cmd": "/opt/homebrew/bin/gh", "args": ["api", "user"], "env": ["GH_TOKEN"]}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err := loadAllowlist(dir)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	if len(list.Allow) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(list.Allow))
+	}
+	if list.Allow[0].Cmd != "/usr/bin/echo" {
+		t.Fatalf("entry 0 cmd = %q", list.Allow[0].Cmd)
+	}
+	if !reflect.DeepEqual(list.Allow[1].Args, []string{"api", "user"}) {
+		t.Fatalf("entry 1 args = %v", list.Allow[1].Args)
+	}
+	if !reflect.DeepEqual(list.Allow[1].Env, []string{"GH_TOKEN"}) {
+		t.Fatalf("entry 1 env = %v", list.Allow[1].Env)
+	}
+}
+
+func TestLoadAllowlistReturnsSpecificErrorWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !errors.Is(err, errAllowlistMissing) {
+		t.Fatalf("want errAllowlistMissing, got %v", err)
+	}
+}
+
+func TestLoadAllowlistRejectsMalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"allow":[`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+}
+
+func TestLoadAllowlistRejectsUnknownTopLevelField(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(`{"deny":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown top-level field")
+	}
+}
+
+func TestLoadAllowlistRejectsUnknownEntryField(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"/usr/bin/echo","args":["x"],"env":[],"extra":"oops"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown entry field")
+	}
+}
+
+func TestLoadAllowlistRejectsNonAbsoluteCmd(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"curl","args":["x"],"env":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for non-absolute cmd")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error should mention 'absolute'; got: %v", err)
+	}
+}
+
+func TestLoadAllowlistRejectsBadEnvName(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"allow":[{"cmd":"/usr/bin/echo","args":[],"env":["1bad"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadAllowlist(dir)
+	if err == nil {
+		t.Fatal("expected error for bad env name")
+	}
 }
