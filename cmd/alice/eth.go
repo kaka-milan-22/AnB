@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/eth"
@@ -45,10 +46,12 @@ func cmdEth(args []string) error {
 		return cmdEthShow(rest)
 	case "import":
 		return cmdEthImport(rest)
+	case "list", "ls":
+		return cmdEthList(rest)
 	case "-h", "--help", "help":
 		return ethUsage()
 	default:
-		return fmt.Errorf("unknown subcommand %q (use one of: new, address, show, import)", sub)
+		return fmt.Errorf("unknown subcommand %q (use one of: new, address, show, import, list)", sub)
 	}
 }
 
@@ -60,6 +63,7 @@ func ethUsage() error {
 	fmt.Fprintln(w, "  address  [--name <key>] [--index N]         Derive m/44'/60'/0'/0/N (EIP-55 checksummed).")
 	fmt.Fprintln(w, "  show     [--name <key>] [--reveal-mnemonic] Print address + metadata; with the flag (TTY only), the 24 words too.")
 	fmt.Fprintln(w, "  import   [--name <key>]                     Read an existing mnemonic from TTY, validate, and store it.")
+	fmt.Fprintln(w, "  list     [--include <key>]... [--no-addr]   Show every vault entry tagged as an ETH wallet, plus its /0 address.")
 	return fmt.Errorf("usage")
 }
 
@@ -191,7 +195,12 @@ func cmdEthShow(args []string) error {
 		return err
 	}
 
-	fmt.Printf("Wallet:           %s\n", *name)
+	// "Vault entry" (not "Wallet") to avoid the ambiguity that the default
+	// --name "eth" creates — "Wallet: eth" reads like a brand name when it
+	// is actually just the vault key. The label change makes the row
+	// self-describing: this string is the value you pass to --name on
+	// subsequent alice eth commands and the key you see in `alice list`.
+	fmt.Printf("Vault entry:      %s\n", *name)
 	fmt.Printf("Set at:           %s\n", entry.CreatedAt)
 	if entry.Desc != "" {
 		fmt.Printf("Description:      %s\n", entry.Desc)
@@ -273,6 +282,139 @@ func cmdEthImport(args []string) error {
 	fmt.Printf("✓ Imported mnemonic under %q.\n", *name)
 	fmt.Printf("First address (m/44'/60'/0'/0/0):  %s\n", addr)
 	return nil
+}
+
+// includeFlag is a repeatable --include flag for cmdEthList.
+type includeFlag []string
+
+func (f *includeFlag) String() string     { return strings.Join(*f, ",") }
+func (f *includeFlag) Set(s string) error { *f = append(*f, s); return nil }
+
+// cmdEthList enumerates every vault entry that looks like an ETH wallet
+// (description marked by `alice eth new`) and prints the /0 address for
+// each. --include lets the operator manually add entries that were stored
+// without the canonical description — e.g. wallet-main-mnemonic, which
+// the wallet/ Python project sets via `alice set` and so carries no
+// alice-eth marker. --no-addr skips the derivation step for a quick
+// metadata-only listing (no Bob round-trip per entry).
+//
+// Marker for auto-detection: the description string written by
+// cmdEthNew / cmdEthImport. Future versions of those commands MUST keep
+// the "BIP-39 mnemonic" substring in the description, or list will lose
+// auto-detection. The marker is a private contract within this package.
+func cmdEthList(args []string) error {
+	fs := newFS("eth list")
+	dir := dirFlag(fs)
+	var include includeFlag
+	fs.Var(&include, "include", "also list this vault key (repeatable; for entries without the alice-eth description)")
+	noAddr := fs.Bool("no-addr", false, "skip address derivation (faster, no Bob round-trip per entry)")
+	parse(fs, args)
+
+	s := localvault.Open(*dir)
+	v, err := s.Load()
+	if err != nil {
+		return err
+	}
+
+	type row struct {
+		Name      string
+		SetAt     string
+		Address   string
+		AddrError string
+	}
+
+	// Collect matching entries: anything whose description contains
+	// "BIP-39 mnemonic", plus everything in --include.
+	includeSet := make(map[string]bool, len(include))
+	for _, k := range include {
+		includeSet[k] = true
+	}
+	var matches []localvault.SecretEntry
+	var names []string
+	for _, name := range sortedVaultKeys(v) {
+		entry, _ := v.Get(name)
+		if strings.Contains(entry.Desc, "BIP-39 mnemonic") || includeSet[name] {
+			matches = append(matches, entry)
+			names = append(names, name)
+			delete(includeSet, name) // mark this --include as found
+		}
+	}
+
+	// Any leftover --include keys didn't exist in the vault — warn but
+	// don't fail; the operator probably typo'd.
+	for k := range includeSet {
+		fmt.Fprintf(os.Stderr, "warning: --include %q not in vault, skipped\n", k)
+	}
+
+	if len(matches) == 0 {
+		fmt.Println("No ETH wallets found. Create one with `alice eth new` or pass --include <key> for entries set without the standard description.")
+		return nil
+	}
+
+	// Derive /0 addresses (or skip if --no-addr).
+	rows := make([]row, len(matches))
+	for i, entry := range matches {
+		rows[i] = row{Name: names[i], SetAt: entry.CreatedAt}
+		if *noAddr {
+			continue
+		}
+		mnemonic, derr := loadMnemonic(*dir, names[i])
+		if derr != nil {
+			rows[i].AddrError = derr.Error()
+			continue
+		}
+		addr, derErr := eth.DeriveAddress(mnemonic, 0)
+		wipeStr(&mnemonic)
+		if derErr != nil {
+			rows[i].AddrError = derErr.Error()
+			continue
+		}
+		rows[i].Address = addr
+	}
+
+	// Render. Table-style: NAME  ADDRESS (idx 0)  SET AT.
+	nameW := 4 // header "NAME"
+	addrW := 15
+	for _, r := range rows {
+		if l := len(r.Name); l > nameW {
+			nameW = l
+		}
+		if l := len(r.Address); l > addrW {
+			addrW = l
+		}
+	}
+	if *noAddr {
+		fmt.Printf("%-*s  %s\n", nameW, "NAME", "SET AT")
+	} else {
+		fmt.Printf("%-*s  %-*s  %s\n", nameW, "NAME", addrW, "ADDRESS (idx 0)", "SET AT")
+	}
+	for _, r := range rows {
+		addrCol := r.Address
+		if addrCol == "" && !*noAddr {
+			addrCol = "—"
+		}
+		if *noAddr {
+			fmt.Printf("%-*s  %s\n", nameW, r.Name, r.SetAt)
+		} else {
+			fmt.Printf("%-*s  %-*s  %s\n", nameW, r.Name, addrW, addrCol, r.SetAt)
+		}
+		if r.AddrError != "" {
+			fmt.Fprintf(os.Stderr, "  (derive failed for %q: %s)\n", r.Name, r.AddrError)
+		}
+	}
+	return nil
+}
+
+// sortedVaultKeys returns vault keys in deterministic order so list output is
+// reproducible across runs. The vault's Load() returns a map iteration
+// order which Go intentionally randomizes.
+func sortedVaultKeys(v *localvault.Vault) []string {
+	keys := make([]string, 0, len(v.Secrets))
+	for k := range v.Secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // loadMnemonic fetches and decrypts the stored mnemonic. Returned string
