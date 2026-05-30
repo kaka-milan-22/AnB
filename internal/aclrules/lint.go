@@ -1,5 +1,7 @@
 package aclrules
 
+import "strings"
+
 // Severity is the lint-finding severity level. String values are
 // operator-visible (appear in alice allowlist-check output and in
 // CI log scraping).
@@ -188,7 +190,7 @@ func lintEnvWildcard(r Rule) *Finding {
 // WARNING not DANGER.
 func lintUnescapedDot(r Rule) *Finding {
 	regexCol := r.Raw
-	if i := indexOfByte(regexCol, '\t'); i >= 0 {
+	if i := strings.IndexByte(regexCol, '\t'); i >= 0 {
 		regexCol = regexCol[:i]
 	}
 
@@ -231,15 +233,6 @@ func lintUnescapedDot(r Rule) *Finding {
 		}
 	}
 	return nil
-}
-
-func indexOfByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }
 
 func lintNoLabel(r Rule) *Finding {

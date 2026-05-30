@@ -1,7 +1,6 @@
 package aclrules
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -52,8 +51,6 @@ func TestLintBenignRuleProducesNoFindings(t *testing.T) {
 		t.Errorf("expected zero findings from skeleton; got %v", findings)
 	}
 }
-
-var _ = strings.Contains
 
 func TestLintTrivialMatchStar(t *testing.T) {
 	r := mustParseOne(t, "^.*$\t*\t# trivially permissive")
@@ -185,7 +182,7 @@ func TestLintMultipleUnescapedDots(t *testing.T) {
 		}
 	}
 	if count != 1 {
-		t.Errorf("expected exactly 1 unescaped-dot finding (deduplicated); got %d", count)
+		t.Errorf("expected exactly 1 unescaped-dot finding (lint reports first hit per rule, not one per dot); got %d", count)
 	}
 }
 
