@@ -318,6 +318,12 @@ func timeNowRFC3339() string {
 // appendRuleLine appends a single newline-terminated rule line to the
 // rules file. Creates the file with mode 0o600 if it does not exist
 // (with a header comment so first-write looks operator-friendly).
+//
+// Concurrency note: POSIX O_APPEND guarantees per-write atomicity on
+// Linux and APFS, so two simultaneous appends produce two intact lines
+// (in some order) without interleaving. Operators using AnB from
+// multiple terminals concurrently get every "yes"-blessed rule
+// preserved; there is no v2.x-style read-modify-write race window.
 func appendRuleLine(path, line string) error {
 	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
 		header := `# AnB exec-allowlist rules. One rule per line:
