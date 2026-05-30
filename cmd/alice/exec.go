@@ -47,6 +47,25 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 		if val == "" {
 			return nil, nil, fmt.Errorf("--env %q: VALUE may not be empty (use unset env, or set a literal placeholder like <agent-vault:k>)", e)
 		}
+		// Fail-closed on near-miss placeholders. A value like `<my-key>` looks
+		// like a vault reference but doesn't match the strict
+		// `<agent-vault:KEY>` grammar — without this check it would slip
+		// through as a literal string and confuse the child process (the
+		// classic symptom: a downstream tool reports the env value is the
+		// wrong format because it received the literal `<my-key>` instead
+		// of the resolved secret).
+		if bad := redact.FindSuspiciousPlaceholders(val); len(bad) > 0 {
+			first := bad[0]
+			inner := first[1 : len(first)-1] // strip `<` and `>`
+			if keyFormat.MatchString(inner) {
+				return nil, nil, fmt.Errorf(
+					"--env %q: value contains %q which looks like a placeholder but is missing the `agent-vault:` prefix. Did you mean `<agent-vault:%s>`?",
+					e, first, inner)
+			}
+			return nil, nil, fmt.Errorf(
+				"--env %q: value contains %q which looks like a placeholder but doesn't match the `<agent-vault:KEY>` grammar (valid KEY is lowercase alphanumeric + hyphens)",
+				e, first)
+		}
 		entries = append(entries, envEntry{Name: name, Value: val})
 		for _, k := range redact.ExtractPlaceholders(val) {
 			keys[k] = struct{}{}

@@ -176,6 +176,63 @@ func TestParseEnvFlagRejectsEmptyValue(t *testing.T) {
 	}
 }
 
+// Regression for the v3.1.x silent-passthrough bug: a value that LOOKS
+// like a placeholder but is missing the `agent-vault:` prefix would slip
+// through as a literal string and the child process would see the
+// literal `<my-key>` instead of the resolved secret. v3.2 fails-closed
+// with a "did you mean…?" hint.
+func TestParseEnvFlagRejectsNearMissPlaceholder(t *testing.T) {
+	_, _, err := parseEnvFlag([]string{"ENCIPHERR_KEY=<encipherr-key>"})
+	if err == nil {
+		t.Fatal("expected error for value missing `agent-vault:` prefix")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "<encipherr-key>") {
+		t.Errorf("error should quote the offending substring; got: %v", err)
+	}
+	if !strings.Contains(msg, "<agent-vault:encipherr-key>") {
+		t.Errorf("error should suggest the correct form `<agent-vault:encipherr-key>`; got: %v", err)
+	}
+}
+
+// Same fail-closed path when the body has a syntactically-impossible KEY
+// (whitespace, uppercase, etc) — no `did you mean` hint, just the generic
+// grammar reminder.
+func TestParseEnvFlagRejectsMalformedAngleBody(t *testing.T) {
+	for _, bad := range []string{
+		"K=<agent-vault: spaced>",
+		"K=<FOO>",
+		"K=<agent-vault:UPPER>",
+		"K=<a_b>", // underscore not allowed
+	} {
+		_, _, err := parseEnvFlag([]string{bad})
+		if err == nil {
+			t.Errorf("expected error for %q", bad)
+		}
+	}
+}
+
+// A pure literal with no angle brackets must continue to pass through —
+// this is the "users still need to pass --env LOG_LEVEL=debug" path and
+// must not regress from the suspicious-placeholder check.
+func TestParseEnvFlagStillAcceptsPlainLiterals(t *testing.T) {
+	entries, keys, err := parseEnvFlag([]string{
+		"LOG_LEVEL=debug",
+		"PATH=/usr/bin:/bin",
+		"OPTS=--foo=bar --baz=qux",
+		"GREETING=hello, world",
+	})
+	if err != nil {
+		t.Fatalf("plain literals should not trigger the near-miss check: %v", err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("entries len = %d want 4", len(entries))
+	}
+	if len(keys) != 0 {
+		t.Fatalf("plain literals reference no vault keys; got %v", keys)
+	}
+}
+
 func TestShowMatchStringFlag(t *testing.T) {
 	got := showMatchStringOutput("/Users/bbwave03/.local/bin/encipherr",
 		[]string{"encrypt", "file", "/tmp/has space.txt"})

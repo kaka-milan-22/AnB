@@ -28,6 +28,13 @@ var (
 	placeholderRE = regexp.MustCompile(`<agent-vault:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)>`)
 	unvaultedRE   = regexp.MustCompile(`<agent-vault:UNVAULTED:sha256:([a-f0-9]{8,16})>`)
 
+	// looseAngleRE matches anything that looks like a placeholder (`<…>`
+	// with a non-empty body, no embedded `>`). Used by FindSuspiciousPlaceholders
+	// to spot near-misses: a value that contains `<foo>` but doesn't match
+	// the strict `<agent-vault:KEY>` grammar is almost always a typo, not
+	// an intentional literal.
+	looseAngleRE = regexp.MustCompile(`<[^>]+>`)
+
 	secretPatterns = compileAll([]string{
 		`sk-[A-Za-z0-9_-]{20,}`,
 		`sk-proj-[A-Za-z0-9_-]{20,}`,
@@ -223,6 +230,37 @@ func ExtractPlaceholders(content string) []string {
 		}
 	}
 	return keys
+}
+
+// IsValidPlaceholder reports whether s is a complete, well-formed
+// `<agent-vault:KEY>` (or `<agent-vault:UNVAULTED:sha256:…>`) reference.
+// Used by callers that need to disambiguate "this string IS a vault
+// placeholder" from "this string just happens to contain `<…>`".
+func IsValidPlaceholder(s string) bool {
+	if s == "" {
+		return false
+	}
+	return placeholderRE.FindString(s) == s || unvaultedRE.FindString(s) == s
+}
+
+// FindSuspiciousPlaceholders returns every `<…>` substring of content that
+// is NOT a valid `<agent-vault:…>` reference. The intent is fail-closed
+// safety on operator typos: `<my-key>` (missing the `agent-vault:` prefix),
+// `<agent-vault: my-key>` (stray whitespace) and similar near-misses are
+// otherwise indistinguishable from literal values and silently slip
+// through to the child process. Callers should turn a non-empty return
+// into a hard error.
+//
+// Pure literals with no `<…>` substring are NOT flagged — `LOG_LEVEL=debug`
+// stays a valid env value.
+func FindSuspiciousPlaceholders(content string) []string {
+	var bad []string
+	for _, m := range looseAngleRE.FindAllString(content, -1) {
+		if !IsValidPlaceholder(m) {
+			bad = append(bad, m)
+		}
+	}
+	return bad
 }
 
 // --- entropy & heuristics ---

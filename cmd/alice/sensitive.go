@@ -42,9 +42,12 @@ func cmdSet(args []string) error {
 	}
 	key := pos[0]
 
-	if *stdin {
-		requireStdoutTTY("alice set")
-	} else {
+	// --stdin reads the value from a pipe; stdout only carries the "✓ Saved"
+	// confirmation, NOT the secret. No TTY required — scripts and CI can
+	// drive `alice set --stdin --force <key>` programmatically. Other paths
+	// (interactive prompt, --generate, --from-env) still need a full TTY
+	// either to read the value (prompt) or to handle the overwrite confirm.
+	if !*stdin {
 		requireTTY("alice set")
 	}
 	if !keyFormat.MatchString(key) {
