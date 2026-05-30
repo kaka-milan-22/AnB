@@ -220,7 +220,10 @@ func LoadFile(path string) ([]Rule, error) {
 	if len(errs) > 0 {
 		// Refuse the whole file on any per-line error — partial loading
 		// would silently drop rules the operator thought they had.
-		return nil, fmt.Errorf("parse %s: %w", path, errs[0])
+		// Surface ALL parse errors at once (errors.Join preserves the
+		// errors.Is chain for each constituent) so a 10-line file with
+		// errors on lines 3 and 8 doesn't force a fix-one-rerun cycle.
+		return nil, fmt.Errorf("parse %s: %w", path, errors.Join(errs...))
 	}
 
 	for _, r := range rules {
