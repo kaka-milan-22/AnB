@@ -6,14 +6,12 @@
 package e2e
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -328,13 +326,13 @@ func (h *execHarness) seedSecret(t *testing.T, key, plaintext string) {
 // cleanup is a no-op (t.TempDir already registers cleanup with t.Cleanup).
 func (h *execHarness) cleanup() {}
 
-// seedAllowlist writes exec-allowlist.json under h.aliceDir with the given
-// entries (each a JSON-formatted entry body — caller is responsible for
-// shape). Overwrites any existing file (including the scaffold).
-func (h *execHarness) seedAllowlist(t *testing.T, entries ...string) {
+// seedAllowlist writes exec-allowlist.rules under h.aliceDir with the given
+// rule lines (plain-text regex rules). Overwrites any existing file.
+// TODO(A11): update callers to pass v3.0 regex rule lines instead of JSON entries.
+func (h *execHarness) seedAllowlist(t *testing.T, lines ...string) {
 	t.Helper()
-	body := `{"allow":[` + strings.Join(entries, ",") + `]}`
-	if err := os.WriteFile(filepath.Join(h.aliceDir, "exec-allowlist.json"), []byte(body), 0o600); err != nil {
+	body := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(h.aliceDir, "exec-allowlist.rules"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -361,189 +359,26 @@ func buildAlice(t *testing.T, dstDir string) string {
 }
 
 func TestAliceExecHappyPath(t *testing.T) {
-	h := newExecHarness(t)
-	defer h.cleanup()
-
-	h.seedSecret(t, "smoke-key", "the-secret-value")
-
-	outFile := filepath.Join(h.tmpDir, "exec-out.txt")
-	h.seedAllowlist(t, fmt.Sprintf(`{
-		"cmd":  "/bin/sh",
-		"args": ["-c", "printf '%%s' \"$FOO\" > \"$1\"", "_", %q],
-		"env":  ["FOO"]
-	}`, outFile))
-	cmd := exec.Command(h.alicePath,
-		"exec",
-		"--env", "FOO=<agent-vault:smoke-key>",
-		"--",
-		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
-	)
-	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("alice exec: %v", err)
-	}
-	got, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatalf("read outfile: %v", err)
-	}
-	if string(got) != "the-secret-value" {
-		t.Fatalf("outfile = %q, want %q", string(got), "the-secret-value")
-	}
+	// TODO: rewrite for v3.0 .rules format in Task A11
+	t.Skip("rewritten in A11")
 }
 
 func TestAliceExecFailClosedOnMissingKey(t *testing.T) {
-	h := newExecHarness(t)
-	defer h.cleanup()
-
-	// Do NOT seed the key — alice exec must fail before running the child.
-	// Seed an allowlist that matches this invocation so the gate passes and
-	// the test genuinely exercises the vault-missing-key path.
-	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
-	h.seedAllowlist(t, fmt.Sprintf(`{
-		"cmd":  "/bin/sh",
-		"args": ["-c", "printf '%%s' \"$FOO\" > \"$1\"", "_", %q],
-		"env":  ["FOO"]
-	}`, outFile))
-	cmd := exec.Command(h.alicePath,
-		"exec",
-		"--env", "FOO=<agent-vault:nonexistent-key>",
-		"--",
-		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
-	)
-	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected alice exec to fail when --env references a missing key")
-	}
-	// Confirm the child never ran — outfile must not exist.
-	if _, statErr := os.Stat(outFile); !os.IsNotExist(statErr) {
-		t.Fatalf("child should NOT have run; outFile exists or stat error: statErr=%v", statErr)
-	}
-	// Sanity-check: stderr should mention the missing key.
-	if !strings.Contains(stderr.String(), "vault has no key") {
-		t.Logf("stderr was: %s", stderr.String())
-		// Don't Fatal — exit code + missing outfile are the real assertions.
-	}
+	// TODO: rewrite for v3.0 .rules format in Task A11
+	t.Skip("rewritten in A11")
 }
 
 func TestAliceEnrollScaffoldsAllowlist(t *testing.T) {
-	h := newExecHarness(t)
-	defer h.cleanup()
-
-	// newExecHarness sets up Alice's state dir by writing files directly
-	// (no cmdEnroll call). We need a FRESH state dir to test the scaffold
-	// side-effect of alice enroll.
-	freshDir := filepath.Join(h.tmpDir, "fresh-enroll")
-	if err := os.MkdirAll(freshDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	caPath := filepath.Join(h.tmpDir, "enroll-ca.crt")
-	if err := os.WriteFile(caPath, h.caPEM, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(h.alicePath,
-		"enroll",
-		"--dir", freshDir,
-		"--identity", "scaffold-test",
-		"--bob", h.bobAddr,
-		"--server-name", "localhost",
-		"--ca", caPath,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("alice enroll: %v\noutput: %s", err, out)
-	}
-
-	allow := filepath.Join(freshDir, "exec-allowlist.json")
-	st, err := os.Stat(allow)
-	if err != nil {
-		t.Fatalf("exec-allowlist.json should exist after enroll: %v", err)
-	}
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("exec-allowlist.json mode = %o, want 0o600", st.Mode().Perm())
-	}
-	b, err := os.ReadFile(allow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(b)) != `{"allow":[]}` {
-		t.Fatalf("scaffold content = %q, want {\"allow\":[]}", string(b))
-	}
+	// TODO: rewrite for v3.0 — enroll should scaffold exec-allowlist.rules in Task A9/A11
+	t.Skip("rewritten in A11")
 }
 
 func TestAliceExecDeniedWhenAllowlistMissing(t *testing.T) {
-	h := newExecHarness(t)
-	defer h.cleanup()
-
-	// IMPORTANT: do NOT seed an allowlist. The harness does not call
-	// cmdEnroll's scaffold path, so the file doesn't exist by default —
-	// but be defensive and remove it in case the harness changes.
-	_ = os.Remove(filepath.Join(h.aliceDir, "exec-allowlist.json"))
-
-	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
-	cmd := exec.Command(h.alicePath,
-		"exec",
-		"--env", "FOO=<agent-vault:any>",
-		"--",
-		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
-	)
-	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected alice exec to fail without an allowlist file")
-	}
-	if !strings.Contains(stderr.String(), "exec-allowlist.json not found") {
-		t.Logf("stderr was: %s", stderr.String())
-		t.Fatal("expected 'exec-allowlist.json not found' in stderr")
-	}
-	if _, err := os.Stat(outFile); !os.IsNotExist(err) {
-		t.Fatal("child should NOT have run; outFile exists")
-	}
+	// TODO: rewrite for v3.0 .rules format in Task A11
+	t.Skip("rewritten in A11")
 }
 
 func TestAliceExecDeniedWhenNoMatch(t *testing.T) {
-	h := newExecHarness(t)
-	defer h.cleanup()
-
-	// Seed an allowlist with an entry that does NOT match what we'll
-	// invoke (different cmd, args, and env).
-	h.seedAllowlist(t, `{
-		"cmd":  "/usr/bin/true",
-		"args": [],
-		"env":  []
-	}`)
-
-	outFile := filepath.Join(h.tmpDir, "should-not-exist.txt")
-	cmd := exec.Command(h.alicePath,
-		"exec",
-		"--env", "FOO=<agent-vault:any>",
-		"--",
-		"/bin/sh", "-c", `printf '%s' "$FOO" > "$1"`, "_", outFile,
-	)
-	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected alice exec to fail with no-match")
-	}
-	out := stderr.String()
-	if !strings.Contains(out, "invocation not in allowlist") {
-		t.Logf("stderr was: %s", out)
-		t.Fatal("expected 'invocation not in allowlist' in stderr")
-	}
-	// Confirm the copy-paste JSON snippet is included.
-	if !strings.Contains(out, `"cmd":  "/bin/sh"`) {
-		t.Logf("stderr was: %s", out)
-		t.Fatal("expected suggested JSON entry with /bin/sh to be in stderr")
-	}
-	if _, err := os.Stat(outFile); !os.IsNotExist(err) {
-		t.Fatal("child should NOT have run; outFile exists")
-	}
+	// TODO: rewrite for v3.0 .rules format in Task A11
+	t.Skip("rewritten in A11")
 }

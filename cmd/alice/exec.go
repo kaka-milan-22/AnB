@@ -9,10 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
 	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v2/internal/redact"
 	"github.com/kaka-milan-22/AnB/v2/internal/term"
@@ -80,30 +81,6 @@ func mergeEnv(resolved []string, overridden map[string]struct{}, parent []string
 	return out
 }
 
-// allowEntry is one strict-match entry in the alice exec allowlist.
-//
-// Label is operator metadata — purely cosmetic and ignored by matchAllowlist.
-// When set on a matched entry, alice's stderr "→ exec ..." line embeds it
-// and (if --reason wasn't passed) it falls through to Bob as the audit
-// reason in the form "[label]". This gives operators free audit attribution
-// for blessed agent paths without having to thread --reason everywhere.
-type allowEntry struct {
-	Label string   `json:"label,omitempty"`
-	Cmd   string   `json:"cmd"`
-	Args  []string `json:"args"`
-	Env   []string `json:"env"`
-}
-
-// allowlist is the on-disk shape of ~/.anb/alice/exec-allowlist.json.
-type allowlist struct {
-	Allow []allowEntry `json:"allow"`
-}
-
-// errAllowlistMissing is returned by loadAllowlist when the file does
-// not exist. cmdExec catches this to print the dedicated init hint
-// instead of a generic file-not-found error.
-var errAllowlistMissing = errors.New("exec-allowlist.json not found")
-
 // errExecDenied signals "operator declined the TTY confirm-and-append
 // prompt; the deny output was already printed before the prompt, so
 // do not print anything else". The dispatcher in main.go recognizes
@@ -112,128 +89,20 @@ var errAllowlistMissing = errors.New("exec-allowlist.json not found")
 // operator had already read it once.
 var errExecDenied = errors.New("alice exec: declined")
 
-// loadAllowlist reads and validates exec-allowlist.json from the given
-// state dir. Returns errAllowlistMissing if the file does not exist.
-// Validates each entry: cmd must be an absolute path, env names must
-// match POSIX env-var syntax. Strict JSON parsing (DisallowUnknownFields)
-// so typos like "cmm:" or "arsg:" fail loud at load time.
-func loadAllowlist(dir string) (*allowlist, error) {
-	path := filepath.Join(dir, "exec-allowlist.json")
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errAllowlistMissing
-		}
-		return nil, fmt.Errorf("exec-allowlist.json: %w", err)
-	}
-	defer f.Close()
-
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	var list allowlist
-	if err := dec.Decode(&list); err != nil {
-		return nil, fmt.Errorf("exec-allowlist.json: %w", err)
-	}
-
-	for i, e := range list.Allow {
-		if e.Cmd == "" {
-			return nil, fmt.Errorf("exec-allowlist.json: entry %d cmd is missing or empty (field \"cmd\" required)", i)
-		}
-		if !filepath.IsAbs(e.Cmd) {
-			return nil, fmt.Errorf("exec-allowlist.json: entry %d cmd %q must be an absolute path", i, e.Cmd)
-		}
-		for _, n := range e.Env {
-			if !envKeyRE.MatchString(n) {
-				return nil, fmt.Errorf("exec-allowlist.json: entry %d env name %q must match %s", i, n, envKeyRE.String())
-			}
-		}
-	}
-	return &list, nil
-}
-
-// matchAllowlist returns the first entry in list.Allow whose cmd, args,
-// and env-key set exactly match the invocation, or nil if no entry
-// matches. Strict byte-for-byte equality on cmd and on each args
-// position; envKeys treated as a set (order-independent), exact
-// membership equality.
-func matchAllowlist(cmd string, args, envKeys []string, list *allowlist) *allowEntry {
-	for i, e := range list.Allow {
-		if e.Cmd != cmd {
-			continue
-		}
-		if len(e.Args) != len(args) {
-			continue
-		}
-		argsOK := true
-		for j := range args {
-			if args[j] != e.Args[j] {
-				argsOK = false
-				break
-			}
-		}
-		if !argsOK {
-			continue
-		}
-		if len(e.Env) != len(envKeys) {
-			continue
-		}
-		a := slices.Clone(envKeys)
-		b := slices.Clone(e.Env)
-		slices.Sort(a)
-		slices.Sort(b)
-		if !slices.Equal(a, b) {
-			continue
-		}
-		return &list.Allow[i]
-	}
-	return nil
-}
-
-// formatDenyJSON produces a 2-space-indented JSON entry the operator
-// can paste verbatim into allow[] in exec-allowlist.json. envKeys is
-// sorted so identical invocations produce identical suggestions
-// (operator can grep their allowlist for the entry without map-order
-// flakiness).
-func formatDenyJSON(cmd string, args, envKeys []string) string {
-	argsJSON, _ := json.Marshal(args)
-	envSorted := slices.Clone(envKeys)
-	slices.Sort(envSorted)
-	envJSON, _ := json.Marshal(envSorted)
-	return fmt.Sprintf("  {\n    \"cmd\":  %q,\n    \"args\": %s,\n    \"env\":  %s\n  }",
-		cmd, argsJSON, envJSON)
-}
-
-// mustMarshalJSON returns the JSON encoding of v; intended for inputs
-// that cannot fail (string slices). Used inside the deny error to embed
-// the "cmd:" "args:" "env:" recap that mirrors what would go into the
-// allowlist file.
-func mustMarshalJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-// sortedStringSlice returns a fresh sorted copy of a slice. Used by the
-// deny error to print env names in a stable order.
-func sortedStringSlice(s []string) []string {
-	out := slices.Clone(s)
-	slices.Sort(out)
-	return out
-}
-
 // envFlagValue is a flag.Value that accumulates repeated --env occurrences.
 type envFlagValue struct{ vals []string }
 
 func (e *envFlagValue) String() string     { return strings.Join(e.vals, ",") }
 func (e *envFlagValue) Set(v string) error { e.vals = append(e.vals, v); return nil }
 
-// cmdExec — agent-safe execution path. Requires a strict (cmd, args,
-// env-key-set) match against ~/.anb/alice/exec-allowlist.json (v2.0+).
-// Denied invocations fail before any vault I/O or mTLS connection.
-// Matched invocations resolve <agent-vault:k> placeholders inside --env
-// values via Bob (mTLS DecryptMany), build the child's env with
-// explicit dedup, then syscall.Exec the child. alice's process image is
-// replaced; alice's heap (with the plaintexts) is discarded by the kernel;
-// alice's stdout/stderr/stdin fds are inherited by the child.
+// cmdExec — agent-safe execution path. Requires a regex match against
+// ~/.anb/alice/exec-allowlist.rules (v3.0+). Denied invocations fail
+// before any vault I/O or mTLS connection. Matched invocations resolve
+// <agent-vault:k> placeholders inside --env values via Bob (mTLS
+// DecryptMany), build the child's env with explicit dedup, then
+// syscall.Exec the child. alice's process image is replaced; alice's
+// heap (with the plaintexts) is discarded by the kernel; alice's
+// stdout/stderr/stdin fds are inherited by the child.
 //
 // Argv (everything after --) is NOT scanned for placeholders — Linux
 // /proc/<pid>/cmdline is world-readable by default, so secrets in argv would
@@ -276,10 +145,10 @@ func cmdExec(args []string) error {
 		return err
 	}
 
-	// Allowlist gate (v2.0+). cmd + args after "--" plus the SET of --env
-	// KEY names are matched against ~/.anb/alice/exec-allowlist.json.
+	// Allowlist gate (v3.0+). cmd + args after "--" plus the SET of --env
+	// KEY names are matched against ~/.anb/alice/exec-allowlist.rules.
 	// Default-deny: missing file → init hint; no match → copy-paste-ready
-	// JSON in the error. Runs BEFORE vault lookup / Bob round-trip — a
+	// rule line in the error. Runs BEFORE vault lookup / Bob round-trip — a
 	// denied invocation never opens an mTLS connection.
 	cmdName := childArgv[0]
 	childArgs := childArgv[1:]
@@ -290,46 +159,35 @@ func cmdExec(args []string) error {
 
 	if !filepath.IsAbs(cmdName) {
 		return fmt.Errorf("alice exec: cmd %q must be an absolute path "+
-			"(e.g. /opt/homebrew/bin/curl); see ~/.anb/alice/exec-allowlist.json", cmdName)
+			"(e.g. /opt/homebrew/bin/curl); see exec-allowlist.rules", cmdName)
 	}
 
 	s := localvault.Open(*dir)
-	list, err := loadAllowlist(s.Dir)
+
+	rulesPath := filepath.Join(s.Dir, "exec-allowlist.rules")
+	rules, err := aclrules.LoadFile(rulesPath)
 	if err != nil {
-		if errors.Is(err, errAllowlistMissing) {
-			return fmt.Errorf("%s/exec-allowlist.json not found.\n\n"+
-				"alice exec is default-deny since v2.0.0. To enable any invocation,\n"+
-				"the allowlist file must exist (even if empty).\n\n"+
-				"Initialize with:\n"+
-				"    echo '{\"allow\":[]}' > %s/exec-allowlist.json\n\n"+
-				"Then re-run your alice exec command; the error will give you the\n"+
-				"exact triple to append.",
-				s.Dir, s.Dir)
+		if errors.Is(err, aclrules.ErrRulesMissing) {
+			return fmt.Errorf("alice exec: no allowlist rules.\n"+
+				"  Create %s to bless commands.\n"+
+				"  Run any command to see the auto-bless prompt (TTY required)",
+				rulesPath)
 		}
 		return err
 	}
 
-	matched := matchAllowlist(cmdName, childArgs, envNames, list)
+	matchStr := aclrules.Canonicalize(cmdName, childArgs)
+
+	var matched *aclrules.Rule
+	for i := range rules {
+		if rules[i].Matches(matchStr, envNames) {
+			matched = &rules[i]
+			break
+		}
+	}
+
 	if matched == nil {
-		denyMsg := fmt.Sprintf("alice exec: invocation not in allowlist.\n\n"+
-			"  cmd:  %s\n"+
-			"  args: %s\n"+
-			"  env:  %s\n\n"+
-			"To allow exactly this invocation, append to allow[] in\n"+
-			"%s/exec-allowlist.json:\n\n"+
-			"%s\n\n"+
-			"Note: strict byte-for-byte equality on cmd, args (each position),\n"+
-			"and env name set. Any change — extra whitespace, different arg\n"+
-			"position, extra/missing env name — requires a new entry.\n"+
-			"Wildcards are not supported.\n\n"+
-			"Tip: add an optional `\"label\": \"<short-name>\"` field to the entry to\n"+
-			"tag it in audit/error output (e.g. \"n9e-login\"). Labels are operator\n"+
-			"metadata and don't participate in matching.",
-			cmdName,
-			mustMarshalJSON(childArgs),
-			mustMarshalJSON(sortedStringSlice(envNames)),
-			s.Dir,
-			formatDenyJSON(cmdName, childArgs, envNames))
+		denyMsg := buildDenyMsgV3(rulesPath, cmdName, childArgs, envNames)
 
 		// TTY-only convenience: offer to append the entry now. Non-TTY
 		// callers (agents, pipes) get the hard-deny exactly as before.
@@ -339,16 +197,13 @@ func cmdExec(args []string) error {
 		if term.StdinIsTTY() && term.IsTTY(os.Stderr) {
 			fmt.Fprintln(os.Stderr, denyMsg)
 			if confirmAppend(os.Stdin, os.Stderr) {
-				entry := allowEntry{
-					Cmd:  cmdName,
-					Args: childArgs,
-					Env:  sortedStringSlice(envNames),
+				line := aclrules.LiteralRule(cmdName, childArgs, envNames,
+					"auto-blessed "+timeNowRFC3339())
+				if err := appendRuleLine(rulesPath, line); err != nil {
+					return fmt.Errorf("append rule: %w", err)
 				}
-				if err := appendAllowEntry(s.Dir, entry); err != nil {
-					return fmt.Errorf("append allowlist entry: %w", err)
-				}
-				return fmt.Errorf("✓ appended entry to %s/exec-allowlist.json — re-run your command to execute it",
-					s.Dir)
+				return fmt.Errorf("✓ appended rule to %s — re-run your command to execute it",
+					rulesPath)
 			}
 			// Operator declined — denyMsg already on stderr (above), so
 			// return the silent sentinel: dispatcher exits non-zero
@@ -421,45 +276,9 @@ func cmdExec(args []string) error {
 		return fmt.Errorf("exec lookup %q: %w", cmdName, err)
 	}
 
-	if matched.Label != "" {
-		fmt.Fprintf(os.Stderr, "→ exec [%s] %s with env=%v\n", matched.Label, cmdPath, envNames)
-	} else {
-		fmt.Fprintf(os.Stderr, "→ exec %s with env=%v\n", cmdPath, envNames)
-	}
+	fmt.Fprintln(os.Stderr, formatAuditLine(cmdPath, envNames, matched))
 
 	return syscall.Exec(cmdPath, childArgv, merged)
-}
-
-// appendAllowEntry reads exec-allowlist.json from dir, parses it,
-// appends entry to Allow, and writes back atomically (via the existing
-// localvault writeAtomic helper). Returns errAllowlistMissing if the
-// file does not exist — callers should not attempt to "create + append"
-// because the missing file is itself an operator-deliberate state
-// (default-deny scaffold; see cmdEnroll).
-//
-// NOTE: no file lock. Two simultaneous alice exec invocations that
-// both reach the TTY-confirm path could race on the read-modify-write
-// — one append would overwrite the other's snapshot, dropping that
-// entry. AnB is single-operator by design (one human at the keyboard);
-// the race window is the human typing "yes" in two terminals at the
-// same moment. If that becomes a real scenario, swap to flock(2).
-func appendAllowEntry(dir string, entry allowEntry) error {
-	list, err := loadAllowlist(dir)
-	if err != nil {
-		return err
-	}
-	list.Allow = append(list.Allow, entry)
-
-	// Re-marshal with stable indentation matching the scaffold style so
-	// the file remains human-editable after auto-appends.
-	body, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal allowlist: %w", err)
-	}
-	body = append(body, '\n')
-
-	s := localvault.Open(dir)
-	return s.WriteFile("exec-allowlist.json", body, 0o600)
 }
 
 // confirmAppend prints a "type 'yes' to confirm" prompt to out and reads
@@ -475,7 +294,65 @@ func appendAllowEntry(dir string, entry allowEntry) error {
 // the dispatcher immediately after either branch (append or deny),
 // so no subsequent stdin read happens.
 func confirmAppend(in io.Reader, out io.Writer) bool {
-	fmt.Fprint(out, "\nAppend this entry to exec-allowlist.json? Type 'yes' to confirm [y/N]: ")
+	fmt.Fprint(out, "\nAppend this entry to exec-allowlist.rules? Type 'yes' to confirm [y/N]: ")
 	line, _ := bufio.NewReader(in).ReadString('\n')
 	return strings.ToLower(strings.TrimSpace(line)) == "yes"
+}
+
+// formatAuditLine builds the "→ exec ..." stderr message for a matched
+// invocation. Surfaces the matched rule's audit label if set, falls
+// back to its line number for traceability.
+func formatAuditLine(cmdPath string, envNames []string, matched *aclrules.Rule) string {
+	if matched.Label != "" {
+		return fmt.Sprintf("→ exec %s with env=%v rule=[%s]", cmdPath, envNames, matched.Label)
+	}
+	return fmt.Sprintf("→ exec %s with env=%v rule=line:%d", cmdPath, envNames, matched.LineNo)
+}
+
+// timeNowRFC3339 wraps time.Now().UTC().Format(time.RFC3339) for the
+// auto-bless label timestamp.
+func timeNowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// appendRuleLine appends a single newline-terminated rule line to the
+// rules file. Creates the file with mode 0o600 if it does not exist
+// (with a header comment so first-write looks operator-friendly).
+func appendRuleLine(path, line string) error {
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		header := `# AnB exec-allowlist rules. One rule per line:
+#   <regex>\t<env-csv>\t#<label>
+# All fields after the first are optional. Implicit ^...$ anchor.
+# Default deny: unmatched invocations are rejected.
+
+`
+		if err := os.WriteFile(path, []byte(header), 0o600); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// buildDenyMsgV3 formats the deny message for v3.0 — shows the literal
+// rule line the operator would paste (regex form, not JSON).
+func buildDenyMsgV3(rulesPath, cmd string, args, envNames []string) string {
+	suggestion := aclrules.LiteralRule(cmd, args, envNames, "")
+	argsRender, _ := json.Marshal(args)
+	envRender, _ := json.Marshal(envNames)
+	return fmt.Sprintf("alice exec: invocation not in allowlist.rules.\n\n"+
+		"  cmd:  %s\n"+
+		"  args: %s\n"+
+		"  env:  %s\n\n"+
+		"To allow exactly this invocation, append to %s:\n\n"+
+		"  %s\n\n"+
+		"(This is a fully-escaped LITERAL regex. Edit by hand to add wildcards.)",
+		cmd, argsRender, envRender, rulesPath, suggestion)
 }
