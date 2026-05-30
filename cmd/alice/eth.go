@@ -100,6 +100,7 @@ func cmdEthNew(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer releaseString(&mnemonic)
 	addr, err := eth.DeriveAddress(mnemonic, 0)
 	if err != nil {
 		return err
@@ -150,7 +151,7 @@ func cmdEthAddress(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer wipeStr(&mnemonic)
+	defer releaseString(&mnemonic)
 
 	addr, err := eth.DeriveAddress(mnemonic, uint32(*index))
 	if err != nil {
@@ -188,7 +189,7 @@ func cmdEthShow(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer wipeStr(&mnemonic)
+	defer releaseString(&mnemonic)
 
 	addr, err := eth.DeriveAddress(mnemonic, uint32(*index))
 	if err != nil {
@@ -251,7 +252,7 @@ func cmdEthImport(args []string) error {
 		return fmt.Errorf("read mnemonic: %w", err)
 	}
 	mnemonic := eth.NormalizeMnemonic(line)
-	defer wipeStr(&mnemonic)
+	defer releaseString(&mnemonic)
 
 	if err := eth.ValidateMnemonic(mnemonic); err != nil {
 		return err
@@ -364,7 +365,7 @@ func cmdEthList(args []string) error {
 			continue
 		}
 		addr, derErr := eth.DeriveAddress(mnemonic, 0)
-		wipeStr(&mnemonic)
+		releaseString(&mnemonic)
 		if derErr != nil {
 			rows[i].AddrError = derErr.Error()
 			continue
@@ -418,7 +419,7 @@ func sortedVaultKeys(v *localvault.Vault) []string {
 }
 
 // loadMnemonic fetches and decrypts the stored mnemonic. Returned string
-// holds plaintext — caller must wipeStr() it when done.
+// holds plaintext — caller must releaseString() it when done.
 func loadMnemonic(dir, name string) (string, error) {
 	s := localvault.Open(dir)
 	v, err := s.Load()
@@ -461,17 +462,29 @@ func printWords(mnemonic string) {
 	}
 }
 
-// wipeStr overwrites the backing memory of a string-valued variable so
-// the mnemonic doesn't linger in the process heap longer than necessary.
-// Best-effort: Go strings are immutable + GC may have moved them.
-// Documented as defense-in-depth, not a guarantee.
-func wipeStr(s *string) {
-	if s == nil || *s == "" {
+// releaseString drops the caller's reference to a sensitive string so
+// the backing memory becomes eligible for garbage collection sooner
+// than relying on natural scope exit.
+//
+// This does NOT zero the underlying bytes. Go strings are immutable;
+// `[]byte(s)` makes a defensive COPY (the previous implementation
+// confused this — it zeroed the copy, not the original, and was
+// effectively a no-op pretending to be defense-in-depth). The only
+// way to actually scrub string memory is via reflect.StringHeader +
+// unsafe.Pointer, which breaks Go's invariants (strings shared from
+// interning / constant-folding could be corrupted). Not worth that
+// trade-off for the short residue window we have.
+//
+// For material that genuinely requires zeroization, use []byte
+// throughout the pipeline and call crypto.Wipe — never convert to
+// string at any step. cmdEthAddress / cmdEthShow currently can't do
+// that because bip39 returns mnemonic as string from its NewMnemonic
+// API, and the operator-facing print path also wants string. Trade-off
+// accepted: the short-lived alice CLI process exits within ms of
+// these calls, bounding the heap-residue window.
+func releaseString(s *string) {
+	if s == nil {
 		return
-	}
-	b := []byte(*s)
-	for i := range b {
-		b[i] = 0
 	}
 	*s = ""
 }

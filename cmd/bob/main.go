@@ -201,7 +201,16 @@ func cmdInit(args []string) error {
 
 	// Master password from a TTY (interactive, the norm) or $ANB_BOB_PASSWORD
 	// (automated deploys / CI). Either way it never touches disk in plaintext.
+	// We Unsetenv immediately after read so any child process bob may fork/exec
+	// later (or anyone re-reading the env via runtime APIs) doesn't see it.
+	// Note: /proc/PID/environ on Linux is a frozen snapshot taken at exec(2)
+	// time — Unsetenv does NOT scrub that. Sibling processes with same-uid
+	// access could still read the original env from /proc. The unset prunes
+	// the in-process inheritance vector only.
 	password := os.Getenv("ANB_BOB_PASSWORD")
+	if password != "" {
+		_ = os.Unsetenv("ANB_BOB_PASSWORD")
+	}
 	if password == "" {
 		if !term.StdinIsTTY() {
 			return fmt.Errorf("init needs a master password: run on a TTY or set ANB_BOB_PASSWORD")
@@ -401,8 +410,14 @@ func cmdServe(args []string) error {
 
 	// Unlock secret: $ANB_BOB_PASSWORD (automation) > parent's stdin pipe (daemon
 	// child) > interactive TTY prompt. It never touches env (unless the operator
-	// set it) or disk.
+	// set it) or disk. Unsetenv immediately after read so the daemon doesn't
+	// carry the password in its own environ table for the rest of its life —
+	// /proc/PID/environ on Linux is frozen at exec(2) time so this only prunes
+	// the in-process inheritance vector, not the kernel snapshot.
 	password := os.Getenv("ANB_BOB_PASSWORD")
+	if password != "" {
+		_ = os.Unsetenv("ANB_BOB_PASSWORD")
+	}
 	if password == "" {
 		switch {
 		case isChild:
@@ -470,6 +485,16 @@ func cmdServe(args []string) error {
 
 	store := keystore.New(func() { audit("AUTOLOCK", "msg", "master key auto-locked (idle TTL); restart serve to unlock") })
 	store.HoldMulti(mks, envFile.Current, time.Duration(*ttl)*time.Second) // store mlocks + owns all K versions now
+	// HoldMulti defensively COPIES each K (v2.6+ hardening), so the
+	// originals here are duplicate non-mlock'd copies of the same key
+	// material. Wipe them so the daemon's memory holds exactly one copy
+	// per K (the store's mlock'd buffer). Matches the discipline in
+	// cmd/bob/rotate.go's `defer wipe(mks)` pattern — without this, the
+	// serve path was leaving a second non-mlock'd copy alive for the
+	// full daemon lifetime.
+	for _, k := range mks {
+		crypto.Wipe(k)
+	}
 
 	tlsCfg, err := mtls.ServerConfig(srvCert, srvKey, caCertPEM)
 	if err != nil {

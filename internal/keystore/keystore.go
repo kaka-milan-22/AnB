@@ -221,8 +221,14 @@ func (s *Store) Decrypt(packed string) (plaintext []byte, rewrapped string, curr
 	cur := s.keys[s.current]
 	sealed, serr := crypto.Seal(cur, pt)
 	if serr != nil {
-		// Got plaintext, can't rewrap — propagate; caller can retry.
-		return pt, "", false, serr
+		// Plaintext is unsafe to return on the error path — a confused
+		// caller might log/return it instead of bailing cleanly. Wipe
+		// and propagate the error only. (Prior behavior returned
+		// (pt, "", false, serr); server.dispatch correctly checked err
+		// first, but the API contract was a footgun for any future
+		// caller.)
+		crypto.Wipe(pt)
+		return nil, "", false, serr
 	}
 	s.armLocked(false)
 	return pt, crypto.PackVersion(s.current, sealed), false, nil
