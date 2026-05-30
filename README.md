@@ -1,39 +1,5 @@
 # Alice and Bob
 
-> ## ⚠ SECURITY ADVISORY — affects v2.0 through v2.5 (fixed in v2.6.0)
->
-> Bob's daemon (`cmd/bob/main.go::cmdServe`) called
-> `store.Hold(mk, …); crypto.Wipe(mk)` — but `Hold` stored the slice by
-> reference and `Wipe` zeroed the underlying array, so the daemon's
-> in-memory K became 32 bytes of zeros immediately after startup.
-> **Every secret stored or retrieved by v2.0–v2.5 Bob was encrypted under
-> an all-zero AES-256 key.** Anyone with read access to `vault.json`
-> could decrypt every entry offline without Bob, the master password,
-> or any network access.
->
-> **Severity**: Catastrophic for the design intent. Practical impact for
-> single-user laptops is bounded by the same-uid trust boundary (anyone
-> who can read `vault.json` already runs as the secret-owning user), but
-> the project's promise of "vault.json is ciphertext, Bob holds the
-> KEK" was never actually delivered.
->
-> **Fix**: v2.6.0 stops calling `Wipe` after `Hold` and makes `Hold`
-> **defensively copy** the key bytes (so an aliasing footgun can't
-> regress). A regression test pins the invariant.
->
-> **Migration**: a one-shot client-side migrator is shipped as
-> `alice rekey-from-zero`. It locally GCM-Opens each vault entry under
-> the all-zero K, sends the plaintext to (fixed) Bob to re-encrypt
-> under the real master key, and writes the new ciphertext back.
-> Idempotent; supports `--dry-run`. **All v2.0–v2.5 operators MUST
-> run this once after upgrading to v2.6**, otherwise existing
-> vault.json entries stay decryptable via the public zero key.
->
-> See "Master key rotation" below for the broader v2.6 versioned-K
-> story; the zero-K bug is unrelated to that work but surfaced during
-> v2.6 testing because v2.6 stopped using zero K and the existing
-> entries no longer decrypted.
-
 A client/server secrets vault for the age of AI agents. **Alice** (the client CLI
 your agents call) keeps only ciphertext on disk and runs a redaction engine;
 **Bob** (the daemon / KMS server) holds the master key and acts as an
