@@ -112,7 +112,29 @@ func (s *Store) writeAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	// Manual open+write+fsync+close+rename, not os.WriteFile, so the
+	// bytes hit disk BEFORE rename — without fsync a crash between
+	// rename and the kernel's writeback would leave a zero-byte (or
+	// torn) file at `path` even though rename(2) itself is atomic on
+	// POSIX filesystems. APFS / ext4 / xfs / btrfs all guarantee
+	// rename atomicity but NOT that file contents are durable at the
+	// time of rename.
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

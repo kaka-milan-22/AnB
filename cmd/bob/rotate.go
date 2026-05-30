@@ -239,6 +239,12 @@ func loadAndUnwrapEnvelope(dir, prompt string) (*crypto.EnvelopeFile, string, er
 	}
 
 	pass := os.Getenv("ANB_BOB_PASSWORD")
+	if pass != "" {
+		// Prune the env immediately so any further fork/exec we do doesn't
+		// inherit the password. See cmdServe for the full caveat re:
+		// /proc/PID/environ.
+		_ = os.Unsetenv("ANB_BOB_PASSWORD")
+	}
 	if pass == "" {
 		if !term.StdinIsTTY() {
 			return nil, "", fmt.Errorf("needs the master password: run on a TTY or set ANB_BOB_PASSWORD")
