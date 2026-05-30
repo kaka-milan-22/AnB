@@ -13,9 +13,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
 	"github.com/kaka-milan-22/AnB/v2/internal/client"
 	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v2/internal/term"
@@ -36,6 +38,26 @@ func main() {
 		version.Print(os.Stdout, "alice")
 		return
 	}
+
+	// One-shot migration of v2.x JSON allowlist to v3.0 rules format.
+	// Cheap (just a stat) when nothing to do; runs once per session.
+	// NOTE: This runs against the default dir before --dir is parsed (which
+	// happens inside each command function). Operators using a custom --dir
+	// will need to manually migrate that directory, or run alice once without
+	// --dir first. For v3.0 first ship this is acceptable — typical operators
+	// use the default dir; --dir is primarily for tests.
+	{
+		dir := os.Getenv("ANB_ALICE_DIR")
+		if dir == "" {
+			if home, herr := os.UserHomeDir(); herr == nil {
+				dir = filepath.Join(home, ".anb", "alice")
+			}
+		}
+		if dir != "" {
+			_ = aclrules.MigrateLegacy(dir) // best-effort; errors logged inside
+		}
+	}
+
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
