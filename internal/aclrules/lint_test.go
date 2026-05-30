@@ -58,21 +58,22 @@ var _ = strings.Contains
 func TestLintTrivialMatchStar(t *testing.T) {
 	r := mustParseOne(t, "^.*$\t*\t# trivially permissive")
 	findings := Lint([]Rule{r})
-	if len(findings) != 1 || findings[0].ID != "trivial-match" {
-		t.Fatalf("expected 1 trivial-match finding; got %v", findings)
+	got := findID(findings, "trivial-match")
+	if got == nil {
+		t.Fatalf("expected trivial-match finding; got %v", findings)
 	}
-	if findings[0].Severity != SeverityDanger {
-		t.Errorf("Severity = %q, want DANGER", findings[0].Severity)
+	if got.Severity != SeverityDanger {
+		t.Errorf("Severity = %q, want DANGER", got.Severity)
 	}
-	if findings[0].LineNo != 1 {
-		t.Errorf("LineNo = %d, want 1", findings[0].LineNo)
+	if got.LineNo != 1 {
+		t.Errorf("LineNo = %d, want 1", got.LineNo)
 	}
 }
 
 func TestLintTrivialMatchPlus(t *testing.T) {
 	r := mustParseOne(t, "^.+$\tKEY\t# plus-permissive")
 	findings := Lint([]Rule{r})
-	if len(findings) != 1 || findings[0].ID != "trivial-match" {
+	if got := findID(findings, "trivial-match"); got == nil {
 		t.Fatalf("expected trivial-match finding; got %v", findings)
 	}
 }
@@ -80,7 +81,7 @@ func TestLintTrivialMatchPlus(t *testing.T) {
 func TestLintTrivialMatchRangeQuantifier(t *testing.T) {
 	r := mustParseOne(t, "^.{0,1000}$\tKEY\t# range")
 	findings := Lint([]Rule{r})
-	if len(findings) != 1 || findings[0].ID != "trivial-match" {
+	if got := findID(findings, "trivial-match"); got == nil {
 		t.Fatalf("expected trivial-match finding; got %v", findings)
 	}
 }
@@ -93,4 +94,60 @@ func TestLintTrivialMatchNarrowDoesNotFire(t *testing.T) {
 			t.Errorf("narrow regex incorrectly flagged as trivial-match: %v", f)
 		}
 	}
+}
+
+func TestLintScriptHostSh(t *testing.T) {
+	r := mustParseOne(t, "^/bin/sh -c .+$\t*\t# debug shell")
+	findings := Lint([]Rule{r})
+	got := findID(findings, "script-host")
+	if got == nil {
+		t.Fatalf("expected script-host finding; got %v", findings)
+	}
+	if got.Severity != SeverityDanger {
+		t.Errorf("Severity = %q, want DANGER", got.Severity)
+	}
+}
+
+func TestLintScriptHostPython(t *testing.T) {
+	r := mustParseOne(t, "^/usr/bin/python3 -c .+$\tK")
+	if got := findID(Lint([]Rule{r}), "script-host"); got == nil {
+		t.Errorf("expected script-host finding for python3")
+	}
+}
+
+func TestLintScriptHostBash(t *testing.T) {
+	r := mustParseOne(t, "^/bin/bash -c .+$\tK")
+	if got := findID(Lint([]Rule{r}), "script-host"); got == nil {
+		t.Errorf("expected script-host finding for bash")
+	}
+}
+
+func TestLintScriptHostJqRaw(t *testing.T) {
+	r := mustParseOne(t, "^/opt/homebrew/bin/jq -r .+$\tK")
+	if got := findID(Lint([]Rule{r}), "script-host"); got == nil {
+		t.Errorf("expected script-host finding for jq -r")
+	}
+}
+
+func TestLintNonScriptHostDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo .+$\tK")
+	if got := findID(Lint([]Rule{r}), "script-host"); got != nil {
+		t.Errorf("echo should not trip script-host; got %v", got)
+	}
+}
+
+func TestLintScriptHostBlockedSpecificScript(t *testing.T) {
+	r := mustParseOne(t, `^/usr/bin/python3 /Users/me/safe\.py( [^ ]+)*$`+"\tK")
+	if got := findID(Lint([]Rule{r}), "script-host"); got != nil {
+		t.Errorf("specific script path should not trip script-host; got %v", got)
+	}
+}
+
+func findID(findings []Finding, id string) *Finding {
+	for i := range findings {
+		if findings[i].ID == id {
+			return &findings[i]
+		}
+	}
+	return nil
 }

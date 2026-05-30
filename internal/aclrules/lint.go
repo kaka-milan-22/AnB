@@ -28,6 +28,7 @@ type lintCheck func(r Rule) *Finding
 // append one entry each.
 var lintChecks = []lintCheck{
 	lintTrivialMatch,
+	lintScriptHost,
 }
 
 // trivialMatchSentinels — inputs no realistic allowlist rule should
@@ -87,6 +88,79 @@ func lintTrivialMatch(r Rule) *Finding {
 			Rule:     r.Raw,
 			Message:  "regex matches every non-empty input string (trivial-match-everything)",
 			Hint:     "narrow with a literal prefix; run `alice exec --show-match-string -- <cmd> <args>` to see exactly what string your regex must match",
+		}
+	}
+	return nil
+}
+
+var scriptHosts = []string{
+	"/bin/sh",
+	"/bin/bash",
+	"/bin/zsh",
+	"/bin/dash",
+	"/bin/ksh",
+	"/usr/bin/python",
+	"/usr/bin/python3",
+	"/opt/homebrew/bin/python3",
+	"/usr/bin/perl",
+	"/opt/homebrew/bin/perl",
+	"/usr/bin/awk",
+	"/usr/bin/gawk",
+	"/opt/homebrew/bin/awk",
+}
+
+var jqHosts = []string{
+	"/usr/bin/jq",
+	"/opt/homebrew/bin/jq",
+}
+
+func lintScriptHost(r Rule) *Finding {
+	for _, host := range scriptHosts {
+		probes := []string{
+			host + " -c x",
+			host + " -c 'echo evil'",
+			host + " -c any-thing-here",
+		}
+		hit := true
+		for _, p := range probes {
+			if !r.Regex.MatchString(p) {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			return &Finding{
+				ID:       "script-host",
+				Severity: SeverityDanger,
+				LineNo:   r.LineNo,
+				Rule:     r.Raw,
+				Message:  "regex matches script-host " + host + " with arbitrary -c argument (arbitrary code execution)",
+				Hint:     "remove this rule, OR allowlist a specific script file path (e.g. ^" + host + ` /Users/me/safe\.py$\tKEY) instead of '-c'`,
+			}
+		}
+	}
+	for _, host := range jqHosts {
+		probes := []string{
+			host + " -r .",
+			host + " -r '.foo'",
+			host + " -r any-expression",
+		}
+		hit := true
+		for _, p := range probes {
+			if !r.Regex.MatchString(p) {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			return &Finding{
+				ID:       "script-host",
+				Severity: SeverityDanger,
+				LineNo:   r.LineNo,
+				Rule:     r.Raw,
+				Message:  "regex matches " + host + " -r with arbitrary expression (jq expression language is code-exec class)",
+				Hint:     "constrain the expression with a literal pattern, or remove this rule",
+			}
 		}
 	}
 	return nil
