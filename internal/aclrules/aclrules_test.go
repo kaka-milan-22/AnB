@@ -295,3 +295,112 @@ func TestParseMultipleRulesAndComments(t *testing.T) {
 		t.Errorf("rules[1].LineNo: got %d want 7", rules[1].LineNo)
 	}
 }
+
+func mustParseOne(t *testing.T, line string) Rule {
+	t.Helper()
+	rules, errs := Parse(strings.NewReader(line + "\n"))
+	if len(errs) != 0 {
+		t.Fatalf("parse errors: %v", errs)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule; got %d", len(rules))
+	}
+	return rules[0]
+}
+
+func TestMatchesExact(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo hello$\tKEY")
+	if !r.Matches("/bin/echo hello", []string{"KEY"}) {
+		t.Error("expected match")
+	}
+	if r.Matches("/bin/echo world", []string{"KEY"}) {
+		t.Error("should not match different args")
+	}
+}
+
+func TestMatchesAnchored(t *testing.T) {
+	r := mustParseOne(t, "/bin/echo hello\tKEY")
+	if r.Matches("XXX /bin/echo hello", []string{"KEY"}) {
+		t.Error("implicit anchor: must not match leading prefix")
+	}
+	if r.Matches("/bin/echo hello YYY", []string{"KEY"}) {
+		t.Error("implicit anchor: must not match trailing suffix")
+	}
+}
+
+func TestMatchesWildcard(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo .+$\tKEY")
+	for _, s := range []string{"/bin/echo a", "/bin/echo a b c", "/bin/echo 'hello world'"} {
+		if !r.Matches(s, []string{"KEY"}) {
+			t.Errorf("expected match: %q", s)
+		}
+	}
+	if r.Matches("/bin/echo", []string{"KEY"}) {
+		t.Error("'.+' requires at least one trailing char (incl. space)")
+	}
+}
+
+func TestMatchesEnvSubsetExact(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\tKEY")
+	if !r.Matches("/bin/x", []string{"KEY"}) {
+		t.Error("--env KEY should be allowed")
+	}
+	if !r.Matches("/bin/x", nil) {
+		t.Error("no --env should be allowed (empty subset)")
+	}
+	if r.Matches("/bin/x", []string{"OTHER"}) {
+		t.Error("--env OTHER should NOT be allowed")
+	}
+	if r.Matches("/bin/x", []string{"KEY", "OTHER"}) {
+		t.Error("--env KEY,OTHER should NOT be allowed (OTHER not in set)")
+	}
+}
+
+func TestMatchesEnvSubsetCsv(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\tK1,K2,K3")
+	cases := []struct {
+		env  []string
+		want bool
+	}{
+		{nil, true},
+		{[]string{"K1"}, true},
+		{[]string{"K2"}, true},
+		{[]string{"K1", "K3"}, true},
+		{[]string{"K1", "K2", "K3"}, true},
+		{[]string{"K4"}, false},
+		{[]string{"K1", "K4"}, false},
+	}
+	for _, c := range cases {
+		got := r.Matches("/bin/x", c.env)
+		if got != c.want {
+			t.Errorf("env=%v: got %v want %v", c.env, got, c.want)
+		}
+	}
+}
+
+func TestMatchesEnvEmpty(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\t")
+	if !r.Matches("/bin/x", nil) {
+		t.Error("no --env should match an empty env column")
+	}
+	if r.Matches("/bin/x", []string{"K"}) {
+		t.Error("any --env should be denied with empty env column")
+	}
+}
+
+func TestMatchesEnvAny(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\t*")
+	if !r.Matches("/bin/x", nil) {
+		t.Error("nil --env should match * column")
+	}
+	if !r.Matches("/bin/x", []string{"ANYTHING", "GOES"}) {
+		t.Error("any --env should match * column")
+	}
+}
+
+func TestMatchesRegexNoMatch(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\tKEY")
+	if r.Matches("/bin/y", []string{"KEY"}) {
+		t.Error("cmd /bin/y does not match /bin/x")
+	}
+}

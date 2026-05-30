@@ -185,3 +185,35 @@ func Canonicalize(cmd string, args []string) string {
 	}
 	return sb.String()
 }
+
+// Matches reports whether this rule allows the given canonical match
+// string and operator-supplied env-var name set. Both regex anchor
+// (compiled in at parse time) and env subset check must pass.
+func (r *Rule) Matches(matchStr string, envKeys []string) bool {
+	if !r.Regex.MatchString(matchStr) {
+		return false
+	}
+	return r.envAllowed(envKeys)
+}
+
+func (r *Rule) envAllowed(envKeys []string) bool {
+	if r.EnvAny {
+		return true
+	}
+	if len(envKeys) == 0 {
+		return true // empty subset is always allowed
+	}
+	if len(r.EnvAllow) == 0 {
+		return false // no env keys allowed, but operator passed some
+	}
+	allowed := make(map[string]struct{}, len(r.EnvAllow))
+	for _, k := range r.EnvAllow {
+		allowed[k] = struct{}{}
+	}
+	for _, k := range envKeys {
+		if _, ok := allowed[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
