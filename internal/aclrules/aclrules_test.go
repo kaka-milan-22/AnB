@@ -1,7 +1,6 @@
 package aclrules
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -96,5 +95,3 @@ func TestCanonicalizeCombined(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
-
-var _ = strings.Contains // ensure import is used if tests reference it
