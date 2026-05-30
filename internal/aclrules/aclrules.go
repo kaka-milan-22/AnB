@@ -15,6 +15,10 @@
 package aclrules
 
 import (
+	"bufio"
+	"fmt"
+	"io"
+	"regexp"
 	"strings"
 )
 
@@ -41,6 +45,126 @@ func shellescape(s string) string {
 	}
 	// POSIX single-quote: wrap in ' ... '. Embedded ' becomes '\''.
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// envNameRE validates env-var names: POSIX KEY syntax.
+var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Rule is one parsed allowlist entry.
+type Rule struct {
+	Regex    *regexp.Regexp // implicitly anchored ^(?:...)$
+	EnvAllow []string       // sorted env names allowed (empty -> no --env)
+	EnvAny   bool           // env column was "*" -> any env name allowed
+	Label    string         // audit label from field 3 (empty if no label)
+	LineNo   int            // 1-based line number in source file
+	Raw      string         // original line, for error context
+}
+
+// Parse reads rule lines from r and returns the parsed rules plus any
+// per-line errors. Errors are non-fatal at the line level — Parse
+// returns all valid rules it could parse plus a list of errors for
+// lines that failed. Callers may decide whether to refuse the whole
+// file (LoadFile does) or use the partial result.
+func Parse(r io.Reader) ([]Rule, []error) {
+	var rules []Rule
+	var errs []error
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 4*1024), 4*1024) // 4 KB per line max
+	lineNo := 0
+	for sc.Scan() {
+		lineNo++
+		line := sc.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		rule, err := parseLine(line, lineNo)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	if err := sc.Err(); err != nil {
+		errs = append(errs, fmt.Errorf("scan: %w", err))
+	}
+	return rules, errs
+}
+
+func parseLine(line string, lineNo int) (Rule, error) {
+	fields := strings.Split(line, "\t")
+	if len(fields) > 3 {
+		return Rule{}, fmt.Errorf("line %d: %d tab-separated fields, max 3 (got %q)", lineNo, len(fields), line)
+	}
+
+	rxRaw := fields[0]
+	envCol := ""
+	labelCol := ""
+	if len(fields) >= 2 {
+		envCol = fields[1]
+	}
+	if len(fields) >= 3 {
+		labelCol = fields[2]
+	}
+
+	// Anchor implicitly. Operator may add their own ^ / $ — harmless.
+	anchored := "^(?:" + rxRaw + ")$"
+	rx, err := regexp.Compile(anchored)
+	if err != nil {
+		return Rule{}, fmt.Errorf("line %d: invalid regex %q: %w", lineNo, rxRaw, err)
+	}
+
+	envAllow, envAny, err := parseEnvColumn(envCol, lineNo)
+	if err != nil {
+		return Rule{}, err
+	}
+
+	label, err := parseLabelColumn(labelCol, lineNo)
+	if err != nil {
+		return Rule{}, err
+	}
+
+	return Rule{
+		Regex:    rx,
+		EnvAllow: envAllow,
+		EnvAny:   envAny,
+		Label:    label,
+		LineNo:   lineNo,
+		Raw:      line,
+	}, nil
+}
+
+func parseEnvColumn(col string, lineNo int) ([]string, bool, error) {
+	col = strings.TrimSpace(col)
+	if col == "" {
+		return nil, false, nil
+	}
+	if col == "*" {
+		return nil, true, nil
+	}
+	parts := strings.Split(col, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		name := strings.TrimSpace(p)
+		if name == "" {
+			return nil, false, fmt.Errorf("line %d: empty env name in csv %q", lineNo, col)
+		}
+		if !envNameRE.MatchString(name) {
+			return nil, false, fmt.Errorf("line %d: invalid env name %q (must match %s)", lineNo, name, envNameRE.String())
+		}
+		out = append(out, name)
+	}
+	return out, false, nil
+}
+
+func parseLabelColumn(col string, lineNo int) (string, error) {
+	if col == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(col, "#") {
+		return "", fmt.Errorf("line %d: field 3 must start with '#'; got %q", lineNo, col)
+	}
+	return strings.TrimSpace(strings.TrimPrefix(col, "#")), nil
 }
 
 // Canonicalize joins cmd and args into the match string used by Rule.Matches.
