@@ -65,6 +65,7 @@ func main() {
 		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus, "rekey-from-zero": cmdRekeyFromZero,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 		"allowlist-check": cmdAllowlistCheck,
+		"eth":             cmdEth,
 	}
 	fn, ok := cmds[os.Args[1]]
 	if !ok {
@@ -116,7 +117,7 @@ func usage() {
 	fmt.Fprintf(w, row, "get [options] <key>", "View secret metadata or value (human only)")
 	fmt.Fprintf(w, row, "rm <key>", "Remove a secret from the vault (human only)")
 	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (human only)")
-	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin (human only)")
+	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin|aes256 (human only)")
 	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
 	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
 	fmt.Fprintf(w, row, "template [opts] <src> <dst>", "Render <src>'s placeholders into <dst> with mode/owner (human only)")
@@ -127,6 +128,7 @@ func usage() {
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 	fmt.Fprintf(w, row, "allowlist-check [opts]", "Lint exec-allowlist.rules — report dangerous patterns")
+	fmt.Fprintf(w, row, "eth <new|address|show|import>", "BIP-39/44 Ethereum wallet (mnemonic stored as a normal vault entry)")
 
 	fmt.Fprint(w, "\nCommon: --dir DIR   state dir (default ~/.anb/alice or $ANB_ALICE_DIR)\n")
 	os.Exit(2)
