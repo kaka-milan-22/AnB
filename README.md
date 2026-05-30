@@ -296,17 +296,25 @@ alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
-# v2.0.0+: alice exec is default-deny via ~/.anb/alice/exec-allowlist.json.
-# `alice enroll` scaffolds an empty {"allow":[]} for you. To allow a new
-# invocation: run it once. The deny error shows you the exact JSON
-# triple to add. On a TTY (interactive operator), alice also prompts
-# `Type 'yes' to confirm` — answering yes atomically appends the entry
-# and exits with "re-run to execute"; you re-run the command manually.
-# Non-TTY callers (agents, pipes) never see the prompt — hard-deny only.
-#
-# NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
+# Three ways to deliver a vault secret to a process. Pick by *who* runs the
+# command — see "Choosing between alice exec, alice shell, and alice get"
+# below. NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
+
+# (a) Agent / script / non-TTY — gated by exec-allowlist.json
+#     (v2.0.0+ default-deny; first call prompts on TTY, hard-deny otherwise)
 alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
   -- /opt/homebrew/bin/gh api user
+
+# (b) Operator running multiple commands — alice shell injects env once
+#     for the session. TTY-only, no allowlist. The cleaner answer for
+#     interactive batches (e.g. encrypting a folder of files).
+alice shell --env 'GH_TOKEN=<agent-vault:gh-pat>'
+$ gh api user
+$ gh issue list --repo foo/bar
+$ exit
+
+# (c) Operator one-off — pipe or inline expansion, no sub-shell.
+GH_TOKEN=$(alice get gh-pat --reveal) gh api user
 
 # agents use the safe commands — secrets stay redacted
 alice read config.yaml           # secret values → <agent-vault:key>
@@ -667,6 +675,69 @@ Why no allowlist (unlike `alice exec`)? The TTY gate already excludes agents
 structurally — they can't fake a TTY pair — so the allowlist would only add
 friction for the operator who is, by virtue of being at the keyboard, the
 authorization. Audit reason defaults to `[shell]` when `--reason` isn't given.
+
+---
+
+## Choosing between `alice exec`, `alice shell`, and `alice get`
+
+AnB gives you three ways to deliver a vault secret to a process. They look
+similar from the outside; they differ in **who can use them** and **what review
+gate they pass through**. Picking the wrong one creates either security gaps
+(no review) or operator pain (review on every iteration).
+
+| Path | Who | Review gate | When to reach for it |
+|---|---|---|---|
+| **`alice exec --env KEY=<agent-vault:k> -- cmd args...`** | Agent **or** operator; non-TTY OK | **Allowlist** — strict `(cmd, args, env_keys)` triple match; first-miss prompts on TTY, hard-denies otherwise | Scripts, agents, CI, cron — anything that runs without a human at the keyboard. The allowlist is the only thing reviewing argv when no human is. |
+| **`alice shell --env KEY=<agent-vault:k>`** | Operator only (TTY required on stdin + stderr) | **TTY gate** — agents can't fake it | Interactive batch work: encrypting a folder of files, running 50 `kubectl` calls with a token, an afternoon of `gh` API exploration. One bless, many commands, env evaporates on `exit`. |
+| **`alice get <name> --reveal`** piped to a tool | Operator only (TTY required) | **TTY gate** | One-off command that reads its key from stdin or a single positional arg. Or `KEY=$(alice get name --reveal) cmd …` for one-line env injection without spawning a sub-shell. |
+
+### Why the allowlist isn't a universal answer
+
+`alice exec`'s strict per-invocation matching is **deliberately inconvenient
+for repeated operator work**. It's calibrated for the threat model where an
+agent under prompt-injection crafts a malicious invocation — there, every
+review pass matters. For an operator at the keyboard running the same shape
+of command 50 times in a row, that calibration is wrong: the operator audits
+the command shape once (mentally), and asking them to type `yes` 50 times
+trains them into reflex-yes. Reach for `alice shell` instead — bless the env
+injection once for the session, then iterate freely.
+
+### Concrete examples
+
+```sh
+# Batch encryption with encipherr — operator iterating over many files.
+# Wrong: alice exec each time (allowlist prompts per file or needs a strict entry per file).
+# Right: alice shell once, then unlimited encipherr invocations in the session.
+alice shell --env 'ENCIPHERR_KEY=<agent-vault:encipherr-key>'
+$ encipherr encrypt file ~/photos/2026-05.tar
+$ encipherr encrypt file ~/docs/q2-report.pdf
+$ encipherr decrypt file ~/backup/old.enc
+$ exit
+```
+
+```sh
+# One-off operator command — pipe directly, no sub-shell needed.
+ENCIPHERR_KEY=$(alice get encipherr-key --reveal) encipherr encrypt file foo.txt
+```
+
+```sh
+# Agent-driven workflow (cron, CI, Claude Code Bash tool, etc.) — alice exec
+# with allowlist. Non-TTY callers structurally can't reach the prompt.
+alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
+  -- /opt/homebrew/bin/gh api user
+# First call: deny + TTY prompt (if you happen to be at one). After yes,
+# /Users/you/.anb/alice/exec-allowlist.json holds the strict entry and the
+# agent path runs without further interaction.
+```
+
+### A pitfall to avoid
+
+Don't pipe `yes |` into `alice exec` to clear allowlist prompts in bulk —
+that's the reflex-yes failure mode, and it bypasses the protection allowlists
+exist to provide. If you're doing enough iteration to be tempted, the right
+move is to drop out of `alice exec` and use `alice shell` instead. The TTY
+gate is doing the actual security work; the allowlist is the agent-specific
+half of the same gate.
 
 ---
 
