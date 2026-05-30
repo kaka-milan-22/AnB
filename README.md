@@ -800,7 +800,7 @@ that string with `^…$`-bounded patterns.
 When `alice exec`'s invocation doesn't match any rule AND both stdin
 and stderr are TTYs, alice prompts:
 
-    Append this rule and re-run your command? Type 'yes' to confirm [y/N]:
+    Append this entry to exec-allowlist.rules? Type 'yes' to confirm [y/N]:
 
 On `yes`, alice appends a fully-escaped literal regex (so it matches
 exactly the originating invocation, no wildcards). Operator widens

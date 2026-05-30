@@ -257,6 +257,15 @@ func isTrivialMatchEverything(rx *regexp.Regexp) bool {
 func LiteralRule(cmd string, args []string, envKeys []string, label string) string {
 	match := Canonicalize(cmd, args)
 	rxBody := regexp.QuoteMeta(match)
+	// Encode literal control chars that are significant as .rules field
+	// separators or line terminators. regexp.QuoteMeta does not escape
+	// \t/\n/\r because they are not RE2 metacharacters, but a literal tab
+	// inside the regex column would be parsed as a field separator at
+	// load time — poisoning the file. Replace each byte with its regex
+	// escape sequence: \t matches tab, \n matches newline, \r matches CR.
+	rxBody = strings.ReplaceAll(rxBody, "\t", `\t`)
+	rxBody = strings.ReplaceAll(rxBody, "\n", `\n`)
+	rxBody = strings.ReplaceAll(rxBody, "\r", `\r`)
 
 	envSorted := append([]string(nil), envKeys...)
 	sort.Strings(envSorted)

@@ -559,3 +559,47 @@ func TestLiteralRuleRoundTrip(t *testing.T) {
 		t.Errorf("auto-blessed rule must match its originating invocation")
 	}
 }
+
+func TestLiteralRuleEncodesControlChars(t *testing.T) {
+	// arg with embedded tab — must NOT produce a literal tab in the regex column
+	got := LiteralRule("/bin/echo", []string{"hel\tlo"}, []string{"K"}, "")
+	// Should be exactly 2 tab-separated fields: regex and env.
+	// Label is empty so no third tab.
+	parts := strings.Split(got, "\t")
+	if len(parts) != 2 {
+		t.Errorf("expected 2 tab-separated fields; got %d: %v", len(parts), parts)
+	}
+	if !strings.Contains(parts[0], `\t`) {
+		t.Errorf("expected \\t escape in regex; got %q", parts[0])
+	}
+}
+
+func TestLiteralRuleRoundTripWithTab(t *testing.T) {
+	cmd := "/bin/echo"
+	args := []string{"hel\tlo"}
+	envs := []string{"K"}
+	line := LiteralRule(cmd, args, envs, "")
+	rules, errs := Parse(strings.NewReader(line + "\n"))
+	if len(errs) != 0 {
+		t.Fatalf("parse errors: %v", errs)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule; got %d", len(rules))
+	}
+	matchStr := Canonicalize(cmd, args)
+	if !rules[0].Matches(matchStr, envs) {
+		t.Error("rule should match its originating canonical form")
+	}
+}
+
+func TestLiteralRuleEncodesNewlineAndCR(t *testing.T) {
+	got := LiteralRule("/bin/printf", []string{"line1\nline2"}, nil, "")
+	// The returned string must contain zero raw newlines.
+	rawNewlines := strings.Count(got, "\n")
+	if rawNewlines != 0 {
+		t.Errorf("expected 0 raw newlines in rule line; got %d", rawNewlines)
+	}
+	if !strings.Contains(got, `\n`) {
+		t.Errorf("expected \\n escape in regex; got %q", got)
+	}
+}

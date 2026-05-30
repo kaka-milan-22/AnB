@@ -176,10 +176,25 @@ func cmdExec(args []string) error {
 	rules, err := aclrules.LoadFile(rulesPath)
 	if err != nil {
 		if errors.Is(err, aclrules.ErrRulesMissing) {
-			return fmt.Errorf("alice exec: no allowlist rules.\n"+
+			hint := fmt.Sprintf("alice exec: no allowlist rules.\n"+
 				"  Create %s to bless commands.\n"+
 				"  Run any command to see the auto-bless prompt (TTY required)",
 				rulesPath)
+			// If a legacy .json (or its .bak) exists in the state dir, the
+			// operator likely hit a migration failure. Surface a targeted hint
+			// rather than telling them to "create the file" (which won't help).
+			if _, statErr := os.Stat(filepath.Join(s.Dir, "exec-allowlist.json")); statErr == nil {
+				hint += fmt.Sprintf("\n\n  NOTE: %s/exec-allowlist.json exists but did not migrate cleanly.\n"+
+					"  Run 'alice list' to see the migration error; fix the JSON or remove\n"+
+					"  the .json file to start fresh.",
+					s.Dir)
+			} else if _, statErr := os.Stat(filepath.Join(s.Dir, "exec-allowlist.json.bak")); statErr == nil {
+				hint += fmt.Sprintf("\n\n  NOTE: %s/exec-allowlist.json.bak exists but no .rules file was found.\n"+
+					"  The migration ran but .rules may have been removed. Re-run 'alice migrate'\n"+
+					"  or manually restore from the .bak file.",
+					s.Dir)
+			}
+			return fmt.Errorf("%s", hint)
 		}
 		return err
 	}
@@ -336,28 +351,37 @@ func showMatchStringOutput(cmd string, args []string) string {
 // rules file. Creates the file with mode 0o600 if it does not exist
 // (with a header comment so first-write looks operator-friendly).
 //
-// Concurrency note: POSIX O_APPEND guarantees per-write atomicity on
-// Linux and APFS, so two simultaneous appends produce two intact lines
-// (in some order) without interleaving. Operators using AnB from
-// multiple terminals concurrently get every "yes"-blessed rule
-// preserved; there is no v2.x-style read-modify-write race window.
+// Concurrency note: O_CREATE|O_APPEND|O_WRONLY opens (or creates) the
+// file in a single syscall. POSIX O_APPEND guarantees per-write
+// atomicity on Linux and APFS, so two simultaneous appends produce two
+// intact lines (in some order) without interleaving. The header is
+// written only when Stat reports size==0 after open, which is
+// substantially narrower than the previous Stat→WriteFile→OpenFile
+// sequence. Two concurrent creators might both see size==0 and each
+// write a header; that produces duplicate headers but no rule loss —
+// the parser skips comment lines and the file remains loadable. For
+// AnB's single-operator threat model this is sufficient.
 func appendRuleLine(path, line string) error {
-	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if st.Size() == 0 {
 		header := `# AnB exec-allowlist rules. One rule per line:
 #   <regex>\t<env-csv>\t#<label>
 # All fields after the first are optional. Implicit ^...$ anchor.
 # Default deny: unmatched invocations are rejected.
 
 `
-		if err := os.WriteFile(path, []byte(header), 0o600); err != nil {
+		if _, err := f.WriteString(header); err != nil {
 			return err
 		}
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	if _, err := f.WriteString(line + "\n"); err != nil {
 		return err
 	}

@@ -330,7 +330,6 @@ func (h *execHarness) cleanup() {}
 
 // seedAllowlist writes exec-allowlist.rules under h.aliceDir with the given
 // rule lines (plain-text regex rules). Overwrites any existing file.
-// TODO(A11): update callers to pass v3.0 regex rule lines instead of JSON entries.
 func (h *execHarness) seedAllowlist(t *testing.T, lines ...string) {
 	t.Helper()
 	body := strings.Join(lines, "\n") + "\n"
