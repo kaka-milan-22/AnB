@@ -54,3 +54,43 @@ func TestLintBenignRuleProducesNoFindings(t *testing.T) {
 }
 
 var _ = strings.Contains
+
+func TestLintTrivialMatchStar(t *testing.T) {
+	r := mustParseOne(t, "^.*$\t*\t# trivially permissive")
+	findings := Lint([]Rule{r})
+	if len(findings) != 1 || findings[0].ID != "trivial-match" {
+		t.Fatalf("expected 1 trivial-match finding; got %v", findings)
+	}
+	if findings[0].Severity != SeverityDanger {
+		t.Errorf("Severity = %q, want DANGER", findings[0].Severity)
+	}
+	if findings[0].LineNo != 1 {
+		t.Errorf("LineNo = %d, want 1", findings[0].LineNo)
+	}
+}
+
+func TestLintTrivialMatchPlus(t *testing.T) {
+	r := mustParseOne(t, "^.+$\tKEY\t# plus-permissive")
+	findings := Lint([]Rule{r})
+	if len(findings) != 1 || findings[0].ID != "trivial-match" {
+		t.Fatalf("expected trivial-match finding; got %v", findings)
+	}
+}
+
+func TestLintTrivialMatchRangeQuantifier(t *testing.T) {
+	r := mustParseOne(t, "^.{0,1000}$\tKEY\t# range")
+	findings := Lint([]Rule{r})
+	if len(findings) != 1 || findings[0].ID != "trivial-match" {
+		t.Fatalf("expected trivial-match finding; got %v", findings)
+	}
+}
+
+func TestLintTrivialMatchNarrowDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo .+$\tKEY\t# echo with arg")
+	findings := Lint([]Rule{r})
+	for _, f := range findings {
+		if f.ID == "trivial-match" {
+			t.Errorf("narrow regex incorrectly flagged as trivial-match: %v", f)
+		}
+	}
+}
