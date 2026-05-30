@@ -172,6 +172,15 @@ func TestParseEnvFlagRejectsEmptyValue(t *testing.T) {
 	}
 }
 
+func TestShowMatchStringFlag(t *testing.T) {
+	got := showMatchStringOutput("/Users/bbwave03/.local/bin/encipherr",
+		[]string{"encrypt", "file", "/tmp/has space.txt"})
+	want := "/Users/bbwave03/.local/bin/encipherr encrypt file '/tmp/has space.txt'"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

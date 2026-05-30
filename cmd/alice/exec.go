@@ -132,6 +132,8 @@ func cmdExec(args []string) error {
 	var envs envFlagValue
 	fs.Var(&envs, "env", "KEY=VALUE for the child; VALUE may contain <agent-vault:key> placeholders (repeatable)")
 	reasonFlag := fs.String("reason", "", `audit-only "why" string; logged in Bob's ALLOW line. If unset, a matched allowlist entry's label (if any) is used as "[label]".`)
+	showMatchString := fs.Bool("show-match-string", false,
+		"print the canonical match string used by exec-allowlist.rules and exit (no execution)")
 	if err := fs.Parse(aliceArgs); err != nil {
 		return err
 	}
@@ -152,6 +154,12 @@ func cmdExec(args []string) error {
 	// denied invocation never opens an mTLS connection.
 	cmdName := childArgv[0]
 	childArgs := childArgv[1:]
+
+	if *showMatchString {
+		fmt.Println(showMatchStringOutput(cmdName, childArgs))
+		return nil
+	}
+
 	envNames := make([]string, 0, len(parsed))
 	for _, p := range parsed {
 		envNames = append(envNames, p.Name)
@@ -313,6 +321,15 @@ func formatAuditLine(cmdPath string, envNames []string, matched *aclrules.Rule) 
 // auto-bless label timestamp.
 func timeNowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// showMatchStringOutput returns the canonical (shellescape + space-join)
+// form of an invocation — the exact string that rule regexes are tested
+// against. Tiny wrapper around aclrules.Canonicalize so the
+// --show-match-string flag can be unit-tested without spinning up the
+// full flag-parse path.
+func showMatchStringOutput(cmd string, args []string) string {
+	return aclrules.Canonicalize(cmd, args)
 }
 
 // appendRuleLine appends a single newline-terminated rule line to the
