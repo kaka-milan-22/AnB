@@ -30,6 +30,7 @@ var lintChecks = []lintCheck{
 	lintTrivialMatch,
 	lintScriptHost,
 	lintEnvWildcard,
+	lintUnescapedDot,
 }
 
 // trivialMatchSentinels — inputs no realistic allowlist rule should
@@ -179,6 +180,65 @@ func lintEnvWildcard(r Rule) *Finding {
 		Message:  "env column is '*' — any env-var name accepted",
 		Hint:     "list specific env names (e.g. AUTH_TOKEN) unless the binary truly needs unrestricted env. '*' is safe only for binaries that don't leak env content via output",
 	}
+}
+
+// lintUnescapedDot — heuristic: literal `.` in regex column, flanked
+// by `/` within ~30 chars, not preceded by `\`. Best-effort, returns
+// WARNING not DANGER.
+func lintUnescapedDot(r Rule) *Finding {
+	regexCol := r.Raw
+	if i := indexOfByte(regexCol, '\t'); i >= 0 {
+		regexCol = regexCol[:i]
+	}
+
+	for i := 0; i < len(regexCol); i++ {
+		if regexCol[i] != '.' {
+			continue
+		}
+		if i > 0 && regexCol[i-1] == '\\' {
+			continue
+		}
+		left := false
+		for j := i - 1; j >= 0 && j >= i-30; j-- {
+			if regexCol[j] == '/' {
+				left = true
+				break
+			}
+			if regexCol[j] == ' ' || regexCol[j] == '\t' {
+				break
+			}
+		}
+		right := false
+		for j := i + 1; j < len(regexCol) && j <= i+30; j++ {
+			if regexCol[j] == '/' {
+				right = true
+				break
+			}
+			if regexCol[j] == ' ' || regexCol[j] == '\t' || regexCol[j] == '$' {
+				break
+			}
+		}
+		if left && right {
+			return &Finding{
+				ID:       "unescaped-dot",
+				Severity: SeverityWarning,
+				LineNo:   r.LineNo,
+				Rule:     r.Raw,
+				Message:  "regex contains unescaped `.` in a path component (matches any char, not just literal dot)",
+				Hint:     "use `\\.` for literal dot; auto-blessed rules already escape correctly. e.g. /Users/me/.local → /Users/me/\\.local",
+			}
+		}
+	}
+	return nil
+}
+
+func indexOfByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 // Lint runs every registered check against every rule. Findings

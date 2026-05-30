@@ -143,6 +143,52 @@ func TestLintScriptHostBlockedSpecificScript(t *testing.T) {
 	}
 }
 
+func TestLintUnescapedDotInPath(t *testing.T) {
+	r := mustParseOne(t, "^/Users/me/.local/bin/foo .+$\tK")
+	got := findID(Lint([]Rule{r}), "unescaped-dot")
+	if got == nil {
+		t.Fatalf("expected unescaped-dot finding; got %v", Lint([]Rule{r}))
+	}
+	if got.Severity != SeverityWarning {
+		t.Errorf("Severity = %q, want WARNING", got.Severity)
+	}
+}
+
+func TestLintEscapedDotDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, `^/Users/me/\.local/bin/foo .+$`+"\tK")
+	if got := findID(Lint([]Rule{r}), "unescaped-dot"); got != nil {
+		t.Errorf("escaped dot should not trip unescaped-dot; got %v", got)
+	}
+}
+
+func TestLintNoDotDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/usr/bin/echo .+$\tK")
+	if got := findID(Lint([]Rule{r}), "unescaped-dot"); got != nil {
+		t.Errorf("regex without literal dot should not trip; got %v", got)
+	}
+}
+
+func TestLintDotInQuantifierDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/cat .+$\tK")
+	if got := findID(Lint([]Rule{r}), "unescaped-dot"); got != nil {
+		t.Errorf("trailing .+ should not trip unescaped-dot; got %v", got)
+	}
+}
+
+func TestLintMultipleUnescapedDots(t *testing.T) {
+	r := mustParseOne(t, "^/Users/me/.foo/.bar/baz$\tK")
+	findings := Lint([]Rule{r})
+	count := 0
+	for _, f := range findings {
+		if f.ID == "unescaped-dot" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 unescaped-dot finding (deduplicated); got %d", count)
+	}
+}
+
 func TestLintEnvWildcard(t *testing.T) {
 	r := mustParseOne(t, "^/usr/bin/curl .+$\t*\t# debug curl")
 	got := findID(Lint([]Rule{r}), "env-wildcard")
