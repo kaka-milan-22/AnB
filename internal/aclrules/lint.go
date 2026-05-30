@@ -31,6 +31,7 @@ var lintChecks = []lintCheck{
 	lintScriptHost,
 	lintEnvWildcard,
 	lintUnescapedDot,
+	lintNoLabel,
 }
 
 // trivialMatchSentinels — inputs no realistic allowlist rule should
@@ -239,6 +240,20 @@ func indexOfByte(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+func lintNoLabel(r Rule) *Finding {
+	if r.Label != "" {
+		return nil
+	}
+	return &Finding{
+		ID:       "no-label",
+		Severity: SeverityInfo,
+		LineNo:   r.LineNo,
+		Rule:     r.Raw,
+		Message:  "rule has no label",
+		Hint:     "add `\\t# <label>` as third column. Without a label, audit-line stderr shows `rule=line:N` (less searchable than `rule=[name]`)",
+	}
 }
 
 // Lint runs every registered check against every rule. Findings

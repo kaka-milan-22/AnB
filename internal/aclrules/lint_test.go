@@ -189,6 +189,51 @@ func TestLintMultipleUnescapedDots(t *testing.T) {
 	}
 }
 
+func TestLintNoLabel(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo$\tK")
+	got := findID(Lint([]Rule{r}), "no-label")
+	if got == nil {
+		t.Fatalf("expected no-label finding; got %v", Lint([]Rule{r}))
+	}
+	if got.Severity != SeverityInfo {
+		t.Errorf("Severity = %q, want INFO", got.Severity)
+	}
+}
+
+func TestLintLabelPresentDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo$\tK\t# echo")
+	if got := findID(Lint([]Rule{r}), "no-label"); got != nil {
+		t.Errorf("rule with label should not trip no-label; got %v", got)
+	}
+}
+
+func TestLintMultipleFindingsPerRule(t *testing.T) {
+	r := mustParseOne(t, "^.+$\t*")
+	findings := Lint([]Rule{r})
+	wantIDs := map[string]bool{"trivial-match": false, "env-wildcard": false, "no-label": false}
+	for _, f := range findings {
+		if _, ok := wantIDs[f.ID]; ok {
+			wantIDs[f.ID] = true
+		}
+	}
+	for id, found := range wantIDs {
+		if !found {
+			t.Errorf("expected finding %q; got %v", id, findings)
+		}
+	}
+}
+
+func TestLintMultipleRulesIndependent(t *testing.T) {
+	r1 := mustParseOne(t, "^/bin/echo$\tK\t# echo")
+	r2 := mustParseOne(t, "^.*$\t*\t# yolo")
+	findings := Lint([]Rule{r1, r2})
+	for _, f := range findings {
+		if f.Rule == r1.Raw {
+			t.Errorf("clean rule produced finding: %v", f)
+		}
+	}
+}
+
 func TestLintEnvWildcard(t *testing.T) {
 	r := mustParseOne(t, "^/usr/bin/curl .+$\t*\t# debug curl")
 	got := findID(Lint([]Rule{r}), "env-wildcard")
