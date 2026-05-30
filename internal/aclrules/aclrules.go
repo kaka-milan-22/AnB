@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -243,6 +244,37 @@ func isTrivialMatchEverything(rx *regexp.Regexp) bool {
 	return rx.MatchString("") &&
 		rx.MatchString("/") &&
 		rx.MatchString("../../etc/passwd")
+}
+
+// LiteralRule returns a fully-escaped, anchored rule line for the
+// given invocation. Used by alice's auto-bless flow: when operator
+// types 'yes' at the deny prompt, alice appends this line to
+// exec-allowlist.rules. The generated regex matches *exactly* the
+// original (cmd, args); operator can hand-edit later to widen it.
+//
+// Env names are sorted so identical invocations produce byte-identical
+// lines (deterministic for tests and stable diffs).
+func LiteralRule(cmd string, args []string, envKeys []string, label string) string {
+	match := Canonicalize(cmd, args)
+	rxBody := regexp.QuoteMeta(match)
+
+	envSorted := append([]string(nil), envKeys...)
+	sort.Strings(envSorted)
+
+	var sb strings.Builder
+	sb.WriteByte('^')
+	sb.WriteString(rxBody)
+	sb.WriteByte('$')
+	if len(envSorted) > 0 || label != "" {
+		sb.WriteByte('\t')
+		sb.WriteString(strings.Join(envSorted, ","))
+	}
+	if label != "" {
+		sb.WriteByte('\t')
+		sb.WriteString("# ")
+		sb.WriteString(label)
+	}
+	return sb.String()
 }
 
 func (r *Rule) envAllowed(envKeys []string) bool {

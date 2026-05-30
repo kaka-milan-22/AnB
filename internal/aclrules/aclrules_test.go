@@ -498,3 +498,64 @@ func TestLoadFileAcceptsRealisticPermissive(t *testing.T) {
 		t.Errorf("expected 1 rule; got %d", len(rules))
 	}
 }
+
+func TestLiteralRuleSimple(t *testing.T) {
+	got := LiteralRule("/bin/echo", []string{"hello"}, []string{"KEY"}, "test label")
+	want := "^/bin/echo hello$\tKEY\t# test label"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestLiteralRuleEscapesMeta(t *testing.T) {
+	got := LiteralRule("/Users/me/.local/bin/encipherr",
+		[]string{"encrypt", "file", "/tmp/foo.txt"},
+		[]string{"ENCIPHERR_KEY"}, "encipherr file ops")
+	want := `^/Users/me/\.local/bin/encipherr encrypt file /tmp/foo\.txt$` + "\tENCIPHERR_KEY\t# encipherr file ops"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestLiteralRuleEnvSorted(t *testing.T) {
+	got := LiteralRule("/bin/x", nil, []string{"Z", "A", "M"}, "")
+	want := "^/bin/x$\tA,M,Z"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestLiteralRuleEmptyEnv(t *testing.T) {
+	got := LiteralRule("/bin/x", nil, nil, "")
+	want := "^/bin/x$"
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestLiteralRuleArgWithSpace(t *testing.T) {
+	got := LiteralRule("/bin/echo", []string{"hello world"}, nil, "")
+	want := `^/bin/echo 'hello world'$`
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestLiteralRuleRoundTrip(t *testing.T) {
+	cmd := "/Users/me/.local/bin/encipherr"
+	args := []string{"encrypt", "file", "/tmp/has space.txt"}
+	envs := []string{"ENCIPHERR_KEY"}
+	line := LiteralRule(cmd, args, envs, "round-trip test")
+
+	rules, errs := Parse(strings.NewReader(line + "\n"))
+	if len(errs) != 0 {
+		t.Fatalf("parse errors: %v", errs)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule; got %d", len(rules))
+	}
+	matchStr := Canonicalize(cmd, args)
+	if !rules[0].Matches(matchStr, envs) {
+		t.Errorf("auto-blessed rule must match its originating invocation")
+	}
+}
