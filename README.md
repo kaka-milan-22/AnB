@@ -97,11 +97,10 @@ request against it (like Kubernetes client-cert auth).
   cannot exfiltrate plaintext.
 - **Agent-safe exec (operator-allowlisted)** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
   is default-deny since v2.0.0. Operator pre-blesses exact
-  (cmd, args, env_keys) triples in `~/.anb/alice/exec-allowlist.json`.
+  Go RE2 regex rules in `~/.anb/alice/exec-allowlist.rules`.
   Matched invocations resolve placeholders into the child's env and
   `syscall.Exec` the child without further prompting (agent-autonomous);
-  any change to the triple — including whitespace, arg order, or env
-  names — requires a new entry. Companion: `alice write --quiet`
+  rules carry an optional env-subset column and label. Companion: `alice write --quiet`
   routes status lines to stderr.
 - **Mutual TLS with a private CA** — no public CA, no ACME. Bob mints its own CA,
   server cert, and signs each client's CSR. Runs over any network (LAN, VPN,
@@ -300,8 +299,8 @@ alice get stripe-key --reveal    # shows the value (TTY required)
 # command — see "Choosing between alice exec, alice shell, and alice get"
 # below. NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
 
-# (a) Agent / script / non-TTY — gated by exec-allowlist.json
-#     (v2.0.0+ default-deny; first call prompts on TTY, hard-deny otherwise)
+# (a) Agent / script / non-TTY — gated by exec-allowlist.rules
+#     (v3.0+ regex-per-line; first call prompts on TTY, hard-deny otherwise)
 alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
   -- /opt/homebrew/bin/gh api user
 
@@ -372,7 +371,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
 | `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
 | `alice status` | Enrollment + Bob reachability/unlock state |
-| `alice exec [--env KEY=V]... [--reason R] -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.json`; on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see Authorization / allowlist sections for the JSON schema. Allowlist entries may carry an optional `"label"` field used in audit/error output and as the default `--reason` fallback. |
+| `alice exec [--env KEY=V]... [--reason R] [--show-match-string] -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.rules` (Go RE2, one rule per line); on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see "Allowlist rules format" section. `--show-match-string` prints the canonical string your regex must match without executing. |
 
 ### alice — sensitive (human only, TTY required)
 
@@ -687,7 +686,7 @@ gate they pass through**. Picking the wrong one creates either security gaps
 
 | Path | Who | Review gate | When to reach for it |
 |---|---|---|---|
-| **`alice exec --env KEY=<agent-vault:k> -- cmd args...`** | Agent **or** operator; non-TTY OK | **Allowlist** — strict `(cmd, args, env_keys)` triple match; first-miss prompts on TTY, hard-denies otherwise | Scripts, agents, CI, cron — anything that runs without a human at the keyboard. The allowlist is the only thing reviewing argv when no human is. |
+| **`alice exec --env KEY=<agent-vault:k> -- cmd args...`** | Agent **or** operator; non-TTY OK | **Allowlist** — Go RE2 regex per line in `exec-allowlist.rules`; first-miss prompts on TTY, hard-denies otherwise | Scripts, agents, CI, cron — anything that runs without a human at the keyboard. The allowlist is the only thing reviewing argv when no human is. |
 | **`alice shell --env KEY=<agent-vault:k>`** | Operator only (TTY required on stdin + stderr) | **TTY gate** — agents can't fake it | Interactive batch work: encrypting a folder of files, running 50 `kubectl` calls with a token, an afternoon of `gh` API exploration. One bless, many commands, env evaporates on `exit`. |
 | **`alice get <name> --reveal`** piped to a tool | Operator only (TTY required) | **TTY gate** | One-off command that reads its key from stdin or a single positional arg. Or `KEY=$(alice get name --reveal) cmd …` for one-line env injection without spawning a sub-shell. |
 
@@ -726,8 +725,8 @@ ENCIPHERR_KEY=$(alice get encipherr-key --reveal) encipherr encrypt file foo.txt
 alice exec --env 'GH_TOKEN=<agent-vault:gh-pat>' \
   -- /opt/homebrew/bin/gh api user
 # First call: deny + TTY prompt (if you happen to be at one). After yes,
-# /Users/you/.anb/alice/exec-allowlist.json holds the strict entry and the
-# agent path runs without further interaction.
+# /Users/you/.anb/alice/exec-allowlist.rules holds a literal-regex entry and
+# the agent path runs without further interaction.
 ```
 
 ### A pitfall to avoid
@@ -738,6 +737,81 @@ exist to provide. If you're doing enough iteration to be tempted, the right
 move is to drop out of `alice exec` and use `alice shell` instead. The TTY
 gate is doing the actual security work; the allowlist is the agent-specific
 half of the same gate.
+
+---
+
+## Allowlist rules format
+
+`alice exec` consults `~/.anb/alice/exec-allowlist.rules` to decide
+whether to inject vault secrets into a given child invocation.
+
+The file is plain text. Each non-empty, non-comment line is one rule:
+
+    <regex>	<env-csv>	#<label>
+
+Three tab-separated fields. The last two are optional. Implicit
+`^…$` anchor on the regex (operator cannot disable).
+
+**How matching works:**
+
+1. alice canonicalises the invocation as `shellescape(cmd) + ' ' +
+   shellescape(arg1) + ' ' + …`. Args with safe characters
+   (`[A-Za-z0-9_\-./:=@,]`) pass through unchanged; anything else
+   is POSIX single-quote wrapped.
+2. Rules are scanned top to bottom; first match wins.
+3. A match requires both the regex test to pass AND the operator's
+   `--env` keys to be a subset of the rule's env-csv.
+4. No match → hard-deny (TTY callers see an auto-bless prompt; non-
+   TTY callers exit non-zero with the suggested rule line).
+
+**Env-csv column:**
+
+| Value | Meaning |
+|---|---|
+| empty | `--env` flags not allowed for this rule |
+| `KEY1` | operator's `--env` keys ⊆ `{KEY1}` |
+| `KEY1,KEY2,KEY3` | operator's `--env` keys ⊆ `{KEY1, KEY2, KEY3}` |
+| `*` | any `--env` name allowed (rare; loud warning) |
+
+**Authoring rules:**
+
+`alice exec --show-match-string -- /path/to/cmd args...` prints the
+exact canonical string your regex must match. Build your regex from
+that string with `^…$`-bounded patterns.
+
+**Example file:**
+
+```text
+# encipherr file ops with any path
+^/Users/me/\.local/bin/encipherr (encrypt|decrypt) file '?[^']+'?$	ENCIPHERR_KEY	# encipherr file ops
+
+# gh issue/api read-only with token
+^/opt/homebrew/bin/gh (api .+|issue view [0-9]+)$	GH_TOKEN	# gh ro
+
+# bob list-keys, no env
+^/Users/me/go/bin/bob list-keys$		# bob list-keys
+
+# n9e login with two env vars (either or both allowed)
+^/usr/bin/node /Users/me/work/n9e-login\.js$	N9E_USERNAME,N9E_PASSWORD	# n9e login
+```
+
+**Auto-bless:**
+
+When `alice exec`'s invocation doesn't match any rule AND both stdin
+and stderr are TTYs, alice prompts:
+
+    Append this entry to exec-allowlist.rules? Type 'yes' to confirm [y/N]:
+
+On `yes`, alice appends a fully-escaped literal regex (so it matches
+exactly the originating invocation, no wildcards). Operator widens
+by hand-editing later. On anything else, alice exits non-zero
+silently — the deny output it already printed once is enough.
+
+**Migration from v2.x:** On first run of v3.0+ alice, an existing
+`exec-allowlist.json` is converted to `exec-allowlist.rules`
+in place; the original is renamed `exec-allowlist.json.bak`. The
+generated rules match exactly the same invocations the JSON entries
+did — strictly behaviour-preserving.
 
 ---
 

@@ -425,19 +425,36 @@ func cmdEnroll(args []string) error {
 	if err := s.SaveConfig(&localvault.Config{BobAddr: *bob, ServerName: sn, Identity: *identity}); err != nil {
 		return err
 	}
-	// v2.0+: scaffold an empty exec-allowlist.json so the first alice exec
-	// call gets a "not in allowlist" deny (with copy-paste suggestion)
-	// rather than a "file not found" error. Idempotent: never clobber an
-	// existing allowlist.
-	allowPath := filepath.Join(s.Dir, "exec-allowlist.json")
-	if _, err := os.Stat(allowPath); errors.Is(err, os.ErrNotExist) {
-		if err := s.WriteFile("exec-allowlist.json", []byte(`{"allow":[]}`+"\n"), 0o600); err != nil {
-			return err
-		}
+	// v3.0+: scaffold exec-allowlist.rules so the first alice exec call gets a
+	// "not in allowlist" deny (with TTY bless-prompt) rather than a
+	// "file not found" error. Idempotent: never clobbers an existing file.
+	if err := scaffoldRulesFile(s.Dir); err != nil {
+		return err
 	}
 	fmt.Printf("✓ Enrolled as %q. CSR written to %s\n", *identity, s.CSRPath())
 	fmt.Println("  Next: have the Bob operator run `bob sign-csr client.csr`, then `alice install-cert <client.crt>`")
 	return nil
+}
+
+// scaffoldRulesFile creates exec-allowlist.rules with a header comment
+// if absent. Idempotent — never overwrites an existing file.
+func scaffoldRulesFile(dir string) error {
+	path := filepath.Join(dir, "exec-allowlist.rules")
+	if _, err := os.Stat(path); err == nil {
+		return nil // already exists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	header := `# AnB exec-allowlist rules.
+# One rule per line: <regex>\t<env-csv>\t#<label>.
+# Implicit ^...$ anchor.
+# Default deny: unmatched invocations are rejected (TTY callers see
+# an auto-bless prompt; non-TTY callers hard-deny).
+# Run 'alice exec --show-match-string -- cmd args...' to see exactly
+# what string your regex needs to match.
+
+`
+	return os.WriteFile(path, []byte(header), 0o600)
 }
 
 // install-cert <client.crt> — install the signed client certificate, after
