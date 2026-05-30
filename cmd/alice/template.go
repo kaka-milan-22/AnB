@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
-	"github.com/kaka-milan-22/AnB/v2/internal/redact"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/redact"
 )
 
 // template <src> <dst> — render <src>'s <agent-vault:k> placeholders into

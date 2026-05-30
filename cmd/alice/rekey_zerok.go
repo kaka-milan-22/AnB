@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 )
 
 // rekey-from-zero — one-shot migration for vaults encrypted under the

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
-	"github.com/kaka-milan-22/AnB/v2/internal/redact"
-	"github.com/kaka-milan-22/AnB/v2/internal/term"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/redact"
+	"github.com/kaka-milan-22/AnB/v3/internal/term"
 )
 
 // cmdShell — spawn an interactive sub-shell with --env values injected.

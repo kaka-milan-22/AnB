@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
+	"github.com/kaka-milan-22/AnB/v3/internal/aclrules"
 )
 
 func TestParseEnvFlagAcceptsValidEntries(t *testing.T) {

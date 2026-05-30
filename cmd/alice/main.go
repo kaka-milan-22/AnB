@@ -17,11 +17,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
-	"github.com/kaka-milan-22/AnB/v2/internal/client"
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
-	"github.com/kaka-milan-22/AnB/v2/internal/term"
-	"github.com/kaka-milan-22/AnB/v2/internal/version"
+	"github.com/kaka-milan-22/AnB/v3/internal/aclrules"
+	"github.com/kaka-milan-22/AnB/v3/internal/client"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/term"
+	"github.com/kaka-milan-22/AnB/v3/internal/version"
 )
 
 var (
