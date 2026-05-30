@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/server"
+	"github.com/kaka-milan-22/AnB/v3/internal/server"
 )
 
 // newJSONEmitter returns a server.Emitter that writes one JSON object per

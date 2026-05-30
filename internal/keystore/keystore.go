@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
 )
 
 var (

@@ -164,19 +164,20 @@ Requires **Go 1.23+**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
-# Note the /v2/ in the path — Go modules require the major-version
+# Note the /v3/ in the path — Go modules require the major-version
 # suffix for v2+. Tags v2.0.0 and v2.1.0 predate the /v2 module path
-# and CANNOT be installed via `go install`; use v2.2.0 or later.
-go install github.com/kaka-milan-22/AnB/v2/cmd/bob@v2.2.0
-go install github.com/kaka-milan-22/AnB/v2/cmd/alice@v2.2.0
+# and cannot be installed via `go install`; tags v2.2.0–v2.6.1 live
+# under /v2/; v3.0.0+ lives under /v3/.
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.0.0
+go install github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.0.0
 
-# …or build from a local clone of the v2.2.0 tag
-git clone --branch v2.2.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v3.0.0 tag
+git clone --branch v3.0.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v2.2.0` with `@latest` to track unreleased changes on `main`.
+Replace `v3.0.0` with `@latest` to track unreleased changes on `main`.
 
 After install, `alice version` / `bob version` (also `-V` / `--version`)
 prints the build info — tag, commit, Go version, platform — read from the

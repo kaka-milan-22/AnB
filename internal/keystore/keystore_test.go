@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
 )
 
 // Multi-K HoldMulti round-trip: Encrypt always uses current K and emits

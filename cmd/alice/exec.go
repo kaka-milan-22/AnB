@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
-	"github.com/kaka-milan-22/AnB/v2/internal/redact"
-	"github.com/kaka-milan-22/AnB/v2/internal/term"
+	"github.com/kaka-milan-22/AnB/v3/internal/aclrules"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/redact"
+	"github.com/kaka-milan-22/AnB/v3/internal/term"
 )
 
 // envEntry is one parsed --env flag: a POSIX env name and its (possibly

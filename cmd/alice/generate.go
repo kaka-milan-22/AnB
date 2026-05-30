@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/pwgen"
+	"github.com/kaka-milan-22/AnB/v3/internal/pwgen"
 )
 
 // gen — generate random password candidates and print them. Human only: stdout

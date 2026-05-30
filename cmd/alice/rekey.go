@@ -5,8 +5,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/kaka-milan-22/AnB/v2/internal/crypto"
-	"github.com/kaka-milan-22/AnB/v2/internal/localvault"
+	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 )
 
 // rekey-status — local inspection of vault.json's per-entry K version.
