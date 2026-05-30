@@ -1,6 +1,7 @@
 package aclrules
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,7 +44,7 @@ func MigrateLegacy(dir string) error {
 	if _, err := os.Stat(rulesPath); err == nil {
 		return nil // .rules wins
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat %s: %w", rulesPath, err)
+		return logAndReturn(fmt.Errorf("stat %s: %w", rulesPath, err))
 	}
 
 	body, err := os.ReadFile(jsonPath)
@@ -51,14 +52,14 @@ func MigrateLegacy(dir string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // nothing to migrate
 		}
-		return fmt.Errorf("read %s: %w", jsonPath, err)
+		return logAndReturn(fmt.Errorf("read %s: %w", jsonPath, err))
 	}
 
 	var legacy migrLegacyFile
-	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&legacy); err != nil {
-		return fmt.Errorf("parse %s: %w", jsonPath, err)
+		return logAndReturn(fmt.Errorf("parse %s: %w", jsonPath, err))
 	}
 
 	var sb strings.Builder
@@ -79,14 +80,24 @@ func MigrateLegacy(dir string) error {
 	// Atomic write via tmp + rename.
 	tmpPath := rulesPath + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(sb.String()), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", tmpPath, err)
+		return logAndReturn(fmt.Errorf("write %s: %w", tmpPath, err))
 	}
 	if err := os.Rename(tmpPath, rulesPath); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", tmpPath, rulesPath, err)
+		return logAndReturn(fmt.Errorf("rename %s -> %s: %w", tmpPath, rulesPath, err))
 	}
 	if err := os.Rename(jsonPath, bakPath); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", jsonPath, bakPath, err)
+		return logAndReturn(fmt.Errorf("rename %s -> %s: %w", jsonPath, bakPath, err))
 	}
 	fmt.Fprintf(os.Stderr, "alice: migrated v2.x exec-allowlist.json → exec-allowlist.rules (%d rules). Original kept as exec-allowlist.json.bak.\n", len(legacy.Allow))
 	return nil
+}
+
+// logAndReturn prints a one-line note to stderr and returns the error.
+// Used by MigrateLegacy because the caller (main.go) discards the
+// return value (best-effort migration); without this, a malformed
+// .json would silently fail and the operator would only learn about
+// it when alice exec hard-denies with "no allowlist rules".
+func logAndReturn(err error) error {
+	fmt.Fprintf(os.Stderr, "alice: migration failed: %v\n", err)
+	return err
 }
