@@ -780,6 +780,48 @@ in place; the original is renamed `exec-allowlist.json.bak`. The
 generated rules match exactly the same invocations the JSON entries
 did — strictly behaviour-preserving.
 
+### Linting your allowlist
+
+`alice allowlist-check` (v3.1+) runs heuristic checks over your rules
+file and reports operator footguns:
+
+```text
+$ alice allowlist-check
+Checking /Users/you/.anb/alice/exec-allowlist.rules
+4 rules loaded, 3 findings.
+
+🚨 line 3: script-host (DANGER)
+  ^/bin/sh -c .+$	*	# debug shell
+  Hint: remove this rule, OR allowlist a specific script file path (e.g. ^/bin/sh /Users/me/safe.sh$	KEY) instead of '-c'.
+
+⚠ line 7: env-wildcard (WARNING)
+  ^/usr/bin/curl .+$	*	# debug curl
+  Hint: list specific env names (e.g. AUTH_TOKEN) unless the binary truly needs unrestricted env.
+
+ℹ line 12: no-label (INFO)
+  ^/usr/bin/cat .+$	K
+  Hint: add `\t# <label>` as third column for audit attribution.
+
+Summary: 4 rules, 1 danger, 1 warnings, 1 info
+```
+
+**Severities:**
+
+| Level | When | Exit code (default) | Exit code (`--strict`) |
+|---|---|---|---|
+| `DANGER` | regex matches everything, or covers a script-host with arbitrary `-c` argument | 1 | 1 |
+| `WARNING` | env column is `*`, or regex has unescaped `.` in a path component | 0 | 2 |
+| `INFO` | rule has no `# label` | 0 | 0 |
+
+Plus parse errors (lines that fail `aclrules.Parse`) always exit 1.
+
+**Flags:**
+
+- `--file PATH` — check a specific file (useful for testing candidate rules before committing)
+- `--strict` — exit non-zero on WARNINGs too (suitable for CI / pre-commit hooks)
+
+**When to run:** before adding a hand-written rule, before a release, or in a pre-commit hook on the same machine that holds the rules file. The check is purely local — no daemon round-trip, no decrypts.
+
 ---
 
 ## Configuration

@@ -64,6 +64,7 @@ func main() {
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
 		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus, "rekey-from-zero": cmdRekeyFromZero,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
+		"allowlist-check": cmdAllowlistCheck,
 	}
 	fn, ok := cmds[os.Args[1]]
 	if !ok {
@@ -125,6 +126,7 @@ func usage() {
 	fmt.Fprintf(w, row, "rekey-from-zero [--dry-run]", "ONE-SHOT: re-encrypt vault entries written under the v2.0–v2.5 zero-K bug")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
+	fmt.Fprintf(w, row, "allowlist-check [opts]", "Lint exec-allowlist.rules — report dangerous patterns")
 
 	fmt.Fprint(w, "\nCommon: --dir DIR   state dir (default ~/.anb/alice or $ANB_ALICE_DIR)\n")
 	os.Exit(2)
