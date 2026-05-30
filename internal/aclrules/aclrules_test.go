@@ -1,6 +1,9 @@
 package aclrules
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -402,5 +405,96 @@ func TestMatchesRegexNoMatch(t *testing.T) {
 	r := mustParseOne(t, "^/bin/x$\tKEY")
 	if r.Matches("/bin/y", []string{"KEY"}) {
 		t.Error("cmd /bin/y does not match /bin/x")
+	}
+}
+
+func TestLoadFileMissing(t *testing.T) {
+	rules, err := LoadFile(filepath.Join(t.TempDir(), "missing.rules"))
+	if !errors.Is(err, ErrRulesMissing) {
+		t.Fatalf("want ErrRulesMissing, got %v", err)
+	}
+	if rules != nil {
+		t.Errorf("expected nil rules; got %v", rules)
+	}
+}
+
+func TestLoadFileEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.rules")
+	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("want no error; got %v", err)
+	}
+	if len(rules) != 0 {
+		t.Errorf("expected zero rules; got %d", len(rules))
+	}
+}
+
+func TestLoadFileValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.rules")
+	body := "^/bin/echo .+$\tKEY\t# echo\n^/bin/bob list-keys$\t\t# bob\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("want no error; got %v", err)
+	}
+	if len(rules) != 2 {
+		t.Errorf("expected 2 rules; got %d", len(rules))
+	}
+}
+
+func TestLoadFileRefusesParseErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.rules")
+	body := "^/bin/[unclosed\tKEY\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Error("expected error for invalid regex")
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("error should reference line 1: %v", err)
+	}
+}
+
+func TestLoadFileRefusesTrivialMatchEverything(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.rules")
+	// .* anchored becomes ^(?:.*)$ which matches every string.
+	body := "^.*$\t*\t# everything\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Error("expected refusal for trivial-match-everything rule")
+	}
+	if !strings.Contains(err.Error(), "matches every") && !strings.Contains(err.Error(), "trivial") {
+		t.Errorf("error should mention trivial-match: %v", err)
+	}
+}
+
+func TestLoadFileAcceptsRealisticPermissive(t *testing.T) {
+	// /bin/echo .+ is permissive but bounded — operator's call.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.rules")
+	body := "^/bin/echo .+$\t*\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := LoadFile(path)
+	if err != nil {
+		t.Errorf("realistic permissive rule should load; got %v", err)
+	}
+	if len(rules) != 1 {
+		t.Errorf("expected 1 rule; got %d", len(rules))
 	}
 }

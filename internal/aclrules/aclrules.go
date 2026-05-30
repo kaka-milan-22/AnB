@@ -16,8 +16,10 @@ package aclrules
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -194,6 +196,50 @@ func (r *Rule) Matches(matchStr string, envKeys []string) bool {
 		return false
 	}
 	return r.envAllowed(envKeys)
+}
+
+// ErrRulesMissing is returned by LoadFile when the rules file does
+// not exist. cmdExec catches this to print the dedicated init hint.
+var ErrRulesMissing = errors.New("exec-allowlist.rules not found")
+
+// LoadFile reads and parses an allowlist rules file. Refuses to load
+// if any line failed to parse or if any rule trivially matches every
+// possible invocation. Returns ErrRulesMissing if the file does not
+// exist (callers may scaffold or hard-deny on this).
+func LoadFile(path string) ([]Rule, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrRulesMissing
+		}
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	rules, errs := Parse(f)
+	if len(errs) > 0 {
+		// Refuse the whole file on any per-line error — partial loading
+		// would silently drop rules the operator thought they had.
+		return nil, fmt.Errorf("parse %s: %w", path, errs[0])
+	}
+
+	for _, r := range rules {
+		if isTrivialMatchEverything(r.Regex) {
+			return nil, fmt.Errorf("%s line %d: rule matches every possible invocation (%q); refuse to load",
+				path, r.LineNo, r.Raw)
+		}
+	}
+	return rules, nil
+}
+
+// isTrivialMatchEverything heuristically detects rules that accept
+// any string. Three sentinel inputs that should never simultaneously
+// match a reasonable allowlist rule: empty string, "/", and a
+// path-traversal-looking adversarial string.
+func isTrivialMatchEverything(rx *regexp.Regexp) bool {
+	return rx.MatchString("") &&
+		rx.MatchString("/") &&
+		rx.MatchString("../../etc/passwd")
 }
 
 func (r *Rule) envAllowed(envKeys []string) bool {
