@@ -32,7 +32,7 @@ func cmdSet(args []string) error {
 	stdin := fs.Bool("stdin", false, "read value from stdin pipe")
 	force := fs.Bool("force", false, "overwrite without prompt (only with --stdin)")
 	generate := fs.Bool("generate", false, "generate the value instead of entering it")
-	genStyle := fs.String("style", "apple", "generator style with --generate: apple | full | passphrase | pin")
+	genStyle := fs.String("style", "apple", "generator style with --generate: apple | full | passphrase | pin | aes256")
 	var genLen int
 	fs.IntVar(&genLen, "l", 0, "generator size with --generate (0 = style default)")
 	fs.IntVar(&genLen, "length", 0, "alias for -l")

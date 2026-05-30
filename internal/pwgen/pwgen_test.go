@@ -1,6 +1,7 @@
 package pwgen
 
 import (
+	"encoding/base64"
 	"regexp"
 	"strings"
 	"testing"
@@ -114,12 +115,58 @@ func TestGenerateBounds(t *testing.T) {
 		{Full, 7}, {Full, 101},
 		{Passphrase, 2}, {Passphrase, 13},
 		{PIN, 3}, {PIN, 33},
+		{AES256, 16}, {AES256, 31}, {AES256, 33}, // only 32 is valid
 		{"bogus", 5},
 	}
 	for _, c := range cases {
 		if _, err := Generate(c.s, c.size); err == nil {
 			t.Fatalf("expected error for style=%q size=%d", c.s, c.size)
 		}
+	}
+}
+
+// AES256 must produce a 44-char URL-safe base64 string ending with `=`
+// that decodes to exactly 32 bytes — the exact wire format encipherr
+// genkey / Fernet keygen / most AES-256 tooling expects. Sample 200
+// times to make sure the encoder isn't producing bias / wrong length.
+func TestAES256(t *testing.T) {
+	want := regexp.MustCompile(`^[A-Za-z0-9_-]{43}=$`)
+	seen := map[string]struct{}{}
+	for i := 0; i < 200; i++ {
+		p, err := Generate(AES256, 0) // default = 32
+		if err != nil {
+			t.Fatalf("aes256: %v", err)
+		}
+		if len(p) != 44 {
+			t.Fatalf("aes256: len got %d want 44 (%q)", len(p), p)
+		}
+		if !want.MatchString(p) {
+			t.Fatalf("aes256: format mismatch %q (want urlsafe-base64 with `=` padding)", p)
+		}
+		raw, derr := base64.URLEncoding.DecodeString(p)
+		if derr != nil {
+			t.Fatalf("aes256: not valid urlsafe-base64: %q (%v)", p, derr)
+		}
+		if len(raw) != 32 {
+			t.Fatalf("aes256: decoded len got %d want 32", len(raw))
+		}
+		seen[p] = struct{}{}
+	}
+	// Collision-free across 200 draws (probability of any collision is
+	// negligible for a 256-bit space).
+	if len(seen) != 200 {
+		t.Fatalf("aes256: %d duplicates across 200 draws — RNG broken?", 200-len(seen))
+	}
+}
+
+// Explicit -l 32 must succeed (matches the default; min=max=32).
+func TestAES256ExplicitSize(t *testing.T) {
+	p, err := Generate(AES256, 32)
+	if err != nil {
+		t.Fatalf("aes256 -l 32: %v", err)
+	}
+	if len(p) != 44 {
+		t.Fatalf("aes256 -l 32: len got %d want 44", len(p))
 	}
 }
 
