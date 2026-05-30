@@ -53,7 +53,7 @@ var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // Rule is one parsed allowlist entry.
 type Rule struct {
 	Regex    *regexp.Regexp // implicitly anchored ^(?:...)$
-	EnvAllow []string       // sorted env names allowed (empty -> no --env)
+	EnvAllow []string       // env names allowed (empty -> no --env; order preserved from source)
 	EnvAny   bool           // env column was "*" -> any env name allowed
 	Label    string         // audit label from field 3 (empty if no label)
 	LineNo   int            // 1-based line number in source file
@@ -97,6 +97,11 @@ func parseLine(line string, lineNo int) (Rule, error) {
 		return Rule{}, fmt.Errorf("line %d: %d tab-separated fields, max 3 (got %q)", lineNo, len(fields), line)
 	}
 
+	// rxRaw is kept verbatim — leading/trailing whitespace is significant
+	// (it's a regex; a literal space at the start is a literal space match).
+	// Operators with mis-paste'd trailing space at end of line get to see
+	// their regex actually contains that space; better than a silent trim
+	// that wouldn't match invocations the way the file visually suggested.
 	rxRaw := fields[0]
 	envCol := ""
 	labelCol := ""
@@ -107,7 +112,9 @@ func parseLine(line string, lineNo int) (Rule, error) {
 		labelCol = fields[2]
 	}
 
-	// Anchor implicitly. Operator may add their own ^ / $ — harmless.
+	// Anchor implicitly. Operator may add their own ^ / $ — harmless
+	// (RE2 collapses ^^ to ^ and $$ to $; escaped \$ stays literal and
+	// the outer $ remains the anchor).
 	anchored := "^(?:" + rxRaw + ")$"
 	rx, err := regexp.Compile(anchored)
 	if err != nil {
