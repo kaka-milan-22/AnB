@@ -29,6 +29,7 @@ type lintCheck func(r Rule) *Finding
 var lintChecks = []lintCheck{
 	lintTrivialMatch,
 	lintScriptHost,
+	lintEnvWildcard,
 }
 
 // trivialMatchSentinels — inputs no realistic allowlist rule should
@@ -164,6 +165,20 @@ func lintScriptHost(r Rule) *Finding {
 		}
 	}
 	return nil
+}
+
+func lintEnvWildcard(r Rule) *Finding {
+	if !r.EnvAny {
+		return nil
+	}
+	return &Finding{
+		ID:       "env-wildcard",
+		Severity: SeverityWarning,
+		LineNo:   r.LineNo,
+		Rule:     r.Raw,
+		Message:  "env column is '*' — any env-var name accepted",
+		Hint:     "list specific env names (e.g. AUTH_TOKEN) unless the binary truly needs unrestricted env. '*' is safe only for binaries that don't leak env content via output",
+	}
 }
 
 // Lint runs every registered check against every rule. Findings

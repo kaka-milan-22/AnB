@@ -143,6 +143,31 @@ func TestLintScriptHostBlockedSpecificScript(t *testing.T) {
 	}
 }
 
+func TestLintEnvWildcard(t *testing.T) {
+	r := mustParseOne(t, "^/usr/bin/curl .+$\t*\t# debug curl")
+	got := findID(Lint([]Rule{r}), "env-wildcard")
+	if got == nil {
+		t.Fatalf("expected env-wildcard finding; got %v", Lint([]Rule{r}))
+	}
+	if got.Severity != SeverityWarning {
+		t.Errorf("Severity = %q, want WARNING", got.Severity)
+	}
+}
+
+func TestLintEnvWildcardEmptyDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/echo$\t\t# no env")
+	if got := findID(Lint([]Rule{r}), "env-wildcard"); got != nil {
+		t.Errorf("empty env should not trip env-wildcard; got %v", got)
+	}
+}
+
+func TestLintEnvWildcardSpecificDoesNotFire(t *testing.T) {
+	r := mustParseOne(t, "^/bin/x$\tK1,K2")
+	if got := findID(Lint([]Rule{r}), "env-wildcard"); got != nil {
+		t.Errorf("specific env names should not trip env-wildcard; got %v", got)
+	}
+}
+
 func findID(findings []Finding, id string) *Finding {
 	for i := range findings {
 		if findings[i].ID == id {
