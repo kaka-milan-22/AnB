@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/kaka-milan-22/AnB/v2/internal/aclrules"
 )
 
 func TestParseEnvFlagAcceptsValidEntries(t *testing.T) {
@@ -234,5 +238,47 @@ func TestConfirmAppendPrintsPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "[y/N]") && !strings.Contains(prompt, "yes/N") {
 		t.Fatalf("prompt should display the default-N hint; got: %q", prompt)
+	}
+}
+
+func TestEnrollScaffoldsRulesFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldRulesFile(dir); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "exec-allowlist.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "# AnB exec-allowlist rules") {
+		t.Errorf("scaffold should have header comment; got %q", text)
+	}
+	// Scaffold must contain ZERO rules — just comments.
+	rules, errs := aclrules.Parse(strings.NewReader(text))
+	if len(errs) != 0 {
+		t.Errorf("scaffold should parse cleanly; got errors %v", errs)
+	}
+	if len(rules) != 0 {
+		t.Errorf("scaffold should have zero rules; got %d", len(rules))
+	}
+}
+
+func TestEnrollScaffoldIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldRulesFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Operator manually adds a rule.
+	rulesPath := filepath.Join(dir, "exec-allowlist.rules")
+	if err := os.WriteFile(rulesPath, []byte("# AnB exec-allowlist rules\n^/x$\tK\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := scaffoldRulesFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(rulesPath)
+	if !strings.Contains(string(body), "^/x$") {
+		t.Errorf("scaffold must not clobber existing file; got %q", body)
 	}
 }
