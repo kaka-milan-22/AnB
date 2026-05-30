@@ -282,3 +282,33 @@ func TestEnrollScaffoldIdempotent(t *testing.T) {
 		t.Errorf("scaffold must not clobber existing file; got %q", body)
 	}
 }
+
+func TestAuditLineWithLabel(t *testing.T) {
+	got := formatAuditLine("/bin/echo", []string{"KEY"}, &aclrules.Rule{Label: "test label", LineNo: 42})
+	if !strings.Contains(got, "rule=[test label]") {
+		t.Errorf("expected label; got %q", got)
+	}
+	if !strings.Contains(got, "/bin/echo") {
+		t.Errorf("expected cmd path; got %q", got)
+	}
+	if !strings.Contains(got, "env=[KEY]") {
+		t.Errorf("expected env list; got %q", got)
+	}
+}
+
+func TestAuditLineWithoutLabel(t *testing.T) {
+	got := formatAuditLine("/bin/echo", []string{"KEY"}, &aclrules.Rule{LineNo: 42})
+	if !strings.Contains(got, "rule=line:42") {
+		t.Errorf("expected line number; got %q", got)
+	}
+}
+
+func TestAuditLineEmptyEnv(t *testing.T) {
+	got := formatAuditLine("/bin/echo", nil, &aclrules.Rule{Label: "no-env", LineNo: 1})
+	if !strings.Contains(got, "rule=[no-env]") {
+		t.Errorf("expected label; got %q", got)
+	}
+	if !strings.Contains(got, "env=[]") {
+		t.Errorf("expected empty env list rendering; got %q", got)
+	}
+}
