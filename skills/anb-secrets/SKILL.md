@@ -59,6 +59,27 @@ Only two:
 4. **Store / rotate** — `alice gen --style aes256 | alice set new-key --stdin --force`, or `alice set token --from-env CI_TOKEN`.
 5. **Plan** — `alice list` + `alice status` before wiring anything.
 
+## Pattern: drive an external crypto tool with a vault-held key
+
+A symmetric key can live in the vault and be injected via `alice exec` into any
+CLI that reads its key from the environment — the tool encrypts/decrypts while
+the key's plaintext never enters your context. Works for `encipherr`, an `age`
+passphrase, `openssl`, `gpg --batch`, etc.
+
+Example — **encipherr** (an AES CLI; its key stored once as `encipherr-key`):
+```sh
+EC=$(command -v encipherr)   # alice exec needs an ABSOLUTE path; this expands to one
+alice exec --env ENCIPHERR_KEY='<agent-vault:encipherr-key>' -- "$EC" encrypt file data.txt -o data.enc
+alice exec --env ENCIPHERR_KEY='<agent-vault:encipherr-key>' -- "$EC" decrypt file data.enc -o data.txt
+```
+
+- The operator blesses an allowlist rule for that absolute path once
+  (default-deny); `--show-match-string` prints the exact pattern to add.
+- Store the key once (human, or non-TTY via `--stdin`):
+  `encipherr genkey | alice set encipherr-key --stdin`.
+- The agent can now encrypt/decrypt files with a strong key it can never read —
+  same guarantee as the rest of AnB, extended to a third-party tool.
+
 ## Important notes
 
 - **`set` non-TTY needs a value source**: one of `--from-env`, `--stdin`, `--generate`. Without it (and no TTY) it errors — you can't be prompted for a value.
