@@ -472,6 +472,16 @@ the interactive confirm.
 > confirmed `alice status` reports `unlocked`, delete those `.bak` dirs so
 > plaintext key copies don't linger.
 
+### Sibling: dotfiles backup
+
+`scripts/dotfiles-backup.sh` applies the same age-tarball model to your
+dotfiles + Claude skills: `scan` flags secret-format content / key files before
+packing, `backup` does tar (junk excluded) → age-encrypt → 0600 with retention
+and optional `rclone --upload`, `restore` decrypts to a fresh dir (never
+clobbers `$HOME`). Unlike a dotfiles *manager* (chezmoi et al.) it produces one
+encrypted blob — ciphertext at rest wherever you store it. Run
+`scripts/dotfiles-backup.sh -h`.
+
 ---
 
 ## Master key rotation (v2.6+)
