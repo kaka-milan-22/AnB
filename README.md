@@ -57,10 +57,12 @@ request against it (like Kubernetes client-cert auth).
   unvaulted tokens with `<agent-vault:key>` / `<agent-vault:UNVAULTED:sha256:…>`
   placeholders; `write` restores them. Secret values never appear in `read`/`scan`
   output.
-- **Safe / sensitive split** — safe commands (`read`/`write`/`has`/`list`) work
-  for agents without a TTY; sensitive commands (`set`/`get --reveal`/…) require an
-  interactive terminal, so an agent (even under prompt injection) structurally
-  cannot exfiltrate plaintext.
+- **Agent-safe by default** — almost every command works without a TTY (`read`,
+  `write`, `exec`, `template`, `scan`, `set`, `import`, `rm`, …). Only the two
+  that expose a *raw value* (`get --reveal`) or an *un-gated injection shell*
+  (`shell`) require an interactive terminal, so an agent — even under prompt
+  injection — structurally can't dump plaintext to its terminal. Confidentiality
+  beyond that is enforced by Bob's per-identity authz, not by the TTY split.
 - **Agent-safe exec (operator-allowlisted)** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
   is default-deny since v2.0.0. Operator pre-blesses exact
   Go RE2 regex rules in `~/.anb/alice/exec-allowlist.rules`.
@@ -185,8 +187,8 @@ bob sign-csr ~/.anb/alice/client.csr --out alice-local.crt --no-pair
 alice install-cert ./alice-local.crt --no-pair
 alice status                          # → Bob status: unlocked
 
-# --- store a secret (human, TTY — `set` never runs non-interactively) ---
-alice set stripe-key                  # paste the value at the prompt
+# --- store a secret (interactive prompt; or non-TTY with --from-env/--stdin/--generate) ---
+alice set stripe-key                  # prompts for the value
 ```
 
 Then use it three ways — pick by *who* runs the command:
@@ -390,32 +392,43 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `bob rotate-master-key [--finalize <id>] [--yes]` | Add a fresh K under the same password; `--finalize <id>` retires an old K (after every alice has rekey'd off it). |
 | `bob list-keys` | Show K versions in `envelope.json` (no password needed). |
 
-### alice — safe (agent + human, no TTY)
+### alice — agent-safe (no TTY required)
+
+Almost the entire surface. A value never reaches your terminal — it flows into a
+child process (`exec`), a file (`write`/`template`), or stays as metadata.
 
 | Command | Description |
 |---|---|
 | `alice read <file>` | Print the file with secrets redacted |
-| `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`). Status lines go to stderr; `--quiet` suppresses them. |
+| `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
-| `alice list [--json]` | List all stored key names (local metadata; no Bob round-trip) |
+| `alice list [--json]` | List all stored key names |
 | `alice status` | Enrollment + Bob reachability/unlock state |
-| `alice exec [--env KEY=V]... [--reason R] [--show-match-string] -- <cmd> [args...]` | Match against `~/.anb/alice/exec-allowlist.rules` (Go RE2, one rule per line); on hit, resolve placeholders and `syscall.Exec` the child. Default-deny — see "Allowlist rules format" section. `--show-match-string` prints the canonical string your regex must match without executing. |
+| `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets (redacted output — line numbers + key names, no values) |
+| `alice get <key>` | Secret **metadata** (no value). The value needs `--reveal` — TTY only, see below. |
+| `alice exec [--env KEY=V]... [--reason R] [--show-match-string] -- <cmd> [args...]` | Match `~/.anb/alice/exec-allowlist.rules` (Go RE2); on hit, resolve placeholders and `syscall.Exec` the child. Default-deny; cmd must be an absolute path. `--show-match-string` prints the canonical match string. |
+| `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s placeholders into `<dst>` (atomic; explicit mode/owner; decrypts only referenced keys). See "Templating". |
+| `alice set <key> (--from-env V \| --stdin \| --generate) [--desc D] [--style S] [-l N] [--force]` | Store/rotate a secret (encrypted by Bob). **Non-TTY needs a value source**; `--force` to overwrite. Authorized by Bob's per-identity authz. |
+| `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
+| `alice import <file> --yes [--min-length N]` | Bulk-import a `.env` (`--yes` required when non-interactive) |
+| `alice init` | Initialize an empty local vault |
+| `alice rm <key> --yes` | Remove a secret (`--yes` when non-interactive). **Local delete, no server-side authz** — recover from an `anb-vault.sh` backup. |
 
-### alice — sensitive (human only, TTY required)
+### alice — human-only (TTY required)
+
+Only the two commands that expose a raw value or an un-gated injection shell:
 
 | Command | Description |
 |---|---|
-| `alice set <key> [--desc D] [--from-env V] [--stdin] [--generate] [--style S] [-l N] [--force]` | Store a secret (encrypted by Bob); `--generate` makes a random value instead of entering one |
-| `alice get <key> [--reveal] [--reason R]` | Metadata, or the value with `--reveal`. `--reason` is logged in Bob's ALLOW audit line. |
-| `alice rm <key>` | Remove a secret |
-| `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
-| `alice import <file> [--min-length N]` | Bulk-import a `.env` file |
-| `alice init` | Initialize an empty local vault |
-| `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets |
-| `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s `<agent-vault:k>` placeholders into `<dst>` with explicit mode (default `0600`) and optional ownership. Atomic write. See "Templating" below. |
-| `alice shell [--env K=V]... [--reason R] [-- shell args...]` | Spawn an interactive sub-shell with `--env` (placeholder-restored) injected. TTY-only (no allowlist); sets `ALICE_SHELL=1`. See "Sub-shell" below. |
-| `alice rekey-status` | Show per-K-version entry counts in this alice's vault.json (no Bob round-trip). |
-| `alice rekey [--reason R]` | Force-migrate every vault entry to Bob's current K version. |
+| `alice get <key> --reveal [--reason R]` | Print the secret **value** — gated to a TTY (can't pipe/redirect). `--reason` logged in Bob's ALLOW line. |
+| `alice shell [--env K=V]... [--reason R] [-- shell args...]` | Interactive sub-shell with `--env` injected; **no allowlist**, so TTY-only; sets `ALICE_SHELL=1`. See "Sub-shell". |
+
+### alice — migration
+
+| Command | Description |
+|---|---|
+| `alice rekey-status` | Per-K-version entry counts in vault.json (local; no Bob round-trip) |
+| `alice rekey [--reason R]` | Force-migrate every vault entry to Bob's current K version |
 
 ### alice — setup
 

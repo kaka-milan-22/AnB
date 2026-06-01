@@ -33,8 +33,6 @@ func cmdTemplate(args []string) error {
 	}
 	src, dst := pos[0], pos[1]
 
-	requireTTY("alice template")
-
 	mode, err := parseOctalMode(*modeFlag)
 	if err != nil {
 		return err

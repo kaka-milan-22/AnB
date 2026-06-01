@@ -30,7 +30,7 @@ func cmdSet(args []string) error {
 	desc := fs.String("desc", "", "description")
 	fromEnv := fs.String("from-env", "", "read value from environment variable")
 	stdin := fs.Bool("stdin", false, "read value from stdin pipe")
-	force := fs.Bool("force", false, "overwrite without prompt (only with --stdin)")
+	force := fs.Bool("force", false, "overwrite an existing key without the confirm prompt")
 	generate := fs.Bool("generate", false, "generate the value instead of entering it")
 	genStyle := fs.String("style", "apple", "generator style with --generate: apple | full | passphrase | pin | aes256")
 	var genLen int
@@ -47,8 +47,11 @@ func cmdSet(args []string) error {
 	// drive `alice set --stdin --force <key>` programmatically. Other paths
 	// (interactive prompt, --generate, --from-env) still need a full TTY
 	// either to read the value (prompt) or to handle the overwrite confirm.
-	if !*stdin {
-		requireTTY("alice set")
+	// Non-interactive callers (agents/CI) need an explicit value source — we
+	// can't prompt without a TTY. Authorization is still enforced by Bob's
+	// encrypt authz; overwrites need --force when there's no TTY to confirm.
+	if !term.StdinIsTTY() && !*stdin && !*generate && *fromEnv == "" {
+		return fmt.Errorf("non-interactive: provide a value via --from-env, --stdin, or --generate")
 	}
 	if !keyFormat.MatchString(key) {
 		return fmt.Errorf("invalid key format (use lowercase alphanumeric + hyphens, e.g. my-api-key)")
@@ -67,9 +70,15 @@ func cmdSet(args []string) error {
 	var value string
 	switch {
 	case *generate:
-		if already && !confirmOverwrite(key, existing) {
-			fmt.Println("Cancelled")
-			return nil
+		if already {
+			ok, oerr := confirmOverwrite(key, existing, *force)
+			if oerr != nil {
+				return oerr
+			}
+			if !ok {
+				fmt.Println("Cancelled")
+				return nil
+			}
 		}
 		gen, gerr := pwgen.Generate(pwgen.Style(*genStyle), genLen)
 		if gerr != nil {
@@ -81,9 +90,15 @@ func cmdSet(args []string) error {
 		if value == "" {
 			return fmt.Errorf("environment variable $%s is not set or empty", *fromEnv)
 		}
-		if already && !confirmOverwrite(key, existing) {
-			fmt.Println("Cancelled")
-			return nil
+		if already {
+			ok, oerr := confirmOverwrite(key, existing, *force)
+			if oerr != nil {
+				return oerr
+			}
+			if !ok {
+				fmt.Println("Cancelled")
+				return nil
+			}
 		}
 	case *stdin:
 		if already && !*force {
@@ -95,9 +110,15 @@ func cmdSet(args []string) error {
 			return fmt.Errorf("no input received from stdin")
 		}
 	default:
-		if already && !confirmOverwrite(key, existing) {
-			fmt.Println("Cancelled")
-			return nil
+		if already {
+			ok, oerr := confirmOverwrite(key, existing, *force)
+			if oerr != nil {
+				return oerr
+			}
+			if !ok {
+				fmt.Println("Cancelled")
+				return nil
+			}
 		}
 		if value, err = term.ReadPassword(fmt.Sprintf("Enter value for %q: ", key)); err != nil {
 			return err
@@ -128,10 +149,19 @@ func cmdSet(args []string) error {
 	return nil
 }
 
-func confirmOverwrite(key string, e localvault.SecretEntry) bool {
+// confirmOverwrite decides whether to overwrite an existing key. --force skips
+// the prompt; without a TTY and without --force it refuses (rather than
+// silently cancelling) so non-interactive callers get a clear error.
+func confirmOverwrite(key string, e localvault.SecretEntry, force bool) (bool, error) {
+	if force {
+		return true, nil
+	}
+	if !term.StdinIsTTY() {
+		return false, fmt.Errorf("%q already exists; pass --force to overwrite non-interactively", key)
+	}
 	fmt.Fprintf(os.Stderr, "⚠ %q already exists (set %s)\n", key, e.CreatedAt)
 	ok, _ := term.Confirm("Overwrite?", false)
-	return ok
+	return ok, nil
 }
 
 // get <key> [--reveal] [--reason "..."] — metadata, or the value (human only,
@@ -146,7 +176,6 @@ func cmdGet(args []string) error {
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: alice get <key> [--reveal] [--reason R]")
 	}
-	requireTTY("alice get")
 	key := pos[0]
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -188,11 +217,11 @@ func cmdGet(args []string) error {
 func cmdRm(args []string) error {
 	fs := newFS("rm")
 	dir := dirFlag(fs)
+	yes := fs.Bool("yes", false, "skip the confirm prompt (required when non-interactive)")
 	pos := parse(fs, args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice rm <key>")
+		return fmt.Errorf("usage: alice rm <key> [--yes]")
 	}
-	requireTTY("alice rm")
 	key := pos[0]
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -202,9 +231,14 @@ func cmdRm(args []string) error {
 	if !v.Has(key) {
 		return fmt.Errorf("secret %q not found", key)
 	}
-	if ok, _ := term.Confirm(fmt.Sprintf("Remove %q?", key), false); !ok {
-		fmt.Println("Cancelled")
-		return nil
+	if !*yes {
+		if !term.StdinIsTTY() {
+			return fmt.Errorf("refusing to remove %q non-interactively without --yes", key)
+		}
+		if ok, _ := term.Confirm(fmt.Sprintf("Remove %q?", key), false); !ok {
+			fmt.Println("Cancelled")
+			return nil
+		}
 	}
 	v.Remove(key)
 	if err := s.Save(v); err != nil {
@@ -219,7 +253,6 @@ func cmdInit(args []string) error {
 	fs := newFS("init")
 	dir := dirFlag(fs)
 	parse(fs, args)
-	requireTTY("alice init")
 	s := localvault.Open(*dir)
 	if s.VaultExists() {
 		fmt.Printf("Vault already exists at %s\n", s.VaultPath())
@@ -238,11 +271,11 @@ func cmdImport(args []string) error {
 	fs := newFS("import")
 	dir := dirFlag(fs)
 	minLen := fs.Int("min-length", 8, "minimum value length to import")
+	yes := fs.Bool("yes", false, "skip the confirm prompt (required when non-interactive)")
 	pos := parse(fs, args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice import <file>")
+		return fmt.Errorf("usage: alice import <file> [--yes]")
 	}
-	requireTTY("alice import")
 	raw, err := os.ReadFile(pos[0])
 	if err != nil {
 		return fmt.Errorf("file not found: %s", pos[0])
@@ -308,9 +341,14 @@ func cmdImport(args []string) error {
 		fmt.Println("Nothing to import (all entries skipped)")
 		return nil
 	}
-	if ok, _ := term.Confirm(fmt.Sprintf("Import %d secret%s?", len(toImport), plural(len(toImport))), true); !ok {
-		fmt.Println("Cancelled")
-		return nil
+	if !*yes {
+		if !term.StdinIsTTY() {
+			return fmt.Errorf("refusing to import %d secret(s) non-interactively without --yes", len(toImport))
+		}
+		if ok, _ := term.Confirm(fmt.Sprintf("Import %d secret%s?", len(toImport), plural(len(toImport))), true); !ok {
+			fmt.Println("Cancelled")
+			return nil
+		}
 	}
 	cl, _, err := loadClient(s)
 	if err != nil {
@@ -339,7 +377,6 @@ func cmdScan(args []string) error {
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: alice scan <file>")
 	}
-	requireTTY("alice scan")
 	raw, err := os.ReadFile(pos[0])
 	if err != nil {
 		return fmt.Errorf("file not found: %s", pos[0])

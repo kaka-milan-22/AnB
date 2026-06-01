@@ -1,10 +1,11 @@
 // Command alice is AnB's client CLI — the agent-facing tool. It keeps only
 // ciphertext locally, runs the redaction engine, and asks Bob (over mTLS) to
-// encrypt/decrypt. Command surface mirrors agent-vault 0.5, including the
-// safe/sensitive TTY split that structurally keeps agents out of plaintext.
+// encrypt/decrypt. Command surface mirrors agent-vault 0.5. Almost everything
+// is agent-safe; only the two commands that reveal plaintext stay TTY-only.
 //
-//	safe (agent + human):     read  write  has  list  status  exec
-//	sensitive (human, TTY):   set  get  rm  import  init  scan
+//	safe (agent + human):     read write has list status exec set get(metadata)
+//	                          rm import gen init scan template
+//	human-only (TTY):         get --reveal   shell
 //	setup:                    enroll  install-cert
 package main
 
@@ -113,14 +114,14 @@ func usage() {
 	fmt.Fprintf(w, row, "list [options]", "List all stored secret key names (safe for agents)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
 	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
-	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret value, or --generate one (interactive, human only)")
-	fmt.Fprintf(w, row, "get [options] <key>", "View secret metadata or value (human only)")
-	fmt.Fprintf(w, row, "rm <key>", "Remove a secret from the vault (human only)")
-	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (human only)")
-	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin|aes256 (human only)")
-	fmt.Fprintf(w, row, "init", "Initialize a new vault (human only)")
-	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (human only)")
-	fmt.Fprintf(w, row, "template [opts] <src> <dst>", "Render <src>'s placeholders into <dst> with mode/owner (human only)")
+	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret (safe; non-TTY needs --from-env/--stdin/--generate)")
+	fmt.Fprintf(w, row, "get [options] <key>", "View metadata (safe); --reveal prints the value (TTY only)")
+	fmt.Fprintf(w, row, "rm <key> [--yes]", "Remove a secret from the vault (safe for agents with --yes)")
+	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (safe for agents with --yes)")
+	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin|aes256 (safe)")
+	fmt.Fprintf(w, row, "init", "Initialize a new vault (safe for agents)")
+	fmt.Fprintf(w, row, "scan [options] <file>", "Audit a file for secrets (safe for agents)")
+	fmt.Fprintf(w, row, "template [opts] <src> <dst>", "Render <src>'s placeholders into <dst> with mode/owner (safe for agents)")
 	fmt.Fprintf(w, row, "shell [--env K=V]... [-- shell]", "Sub-shell with --env injected; TTY-only (human only)")
 	fmt.Fprintf(w, row, "rekey-status", "Show per-K-version entry counts in vault.json (local)")
 	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
