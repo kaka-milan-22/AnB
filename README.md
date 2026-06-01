@@ -398,6 +398,82 @@ All randomness comes from `crypto/rand`.
 
 ---
 
+## Backup & restore
+
+`scripts/anb-vault.sh` is the full backup/restore tool for both sides' state.
+It packs the *entire* state directory (minus volatile `*.log`/`*.pid`/`*.sock`/
+`*.lock`), embeds a SHA-256 `MANIFEST.txt` for content-integrity, encrypts with
+[age](https://filippo.io/age), keeps timestamped versions, and restores
+atomically — always snapshotting the current config first. For `bob` it also
+stops the daemon before swapping state, restarts it, and confirms the
+round-trip with `alice status`.
+
+```
+anb-vault.sh backup  <alice|bob|both> [-o DIR] [-r RECIP | -R FILE | -p] [-k N] [--armor]
+anb-vault.sh restore <alice|bob>  <file.age> [-d STATE_DIR] [-i IDENTITY] [--addr H:P] [--no-restart] [--force]
+anb-vault.sh verify  <file.age> [-i IDENTITY]
+anb-vault.sh list    [-o DIR]
+```
+
+### Encryption: prefer an age recipient
+
+The CA / mTLS private keys (`ca.key`, `server.key`, `client.key`) live as
+**plaintext at rest** (0600), so the age layer is their *only* protection in a
+backup. Treat the backup's age key like the CA key itself.
+
+- **Recipient mode (recommended)** — `-r age1...` / `-R file` /
+  `$ANB_AGE_RECIPIENT`. Only the **public** key is needed to back up, so it can
+  sit in cron/env with no secret online; the **private** identity (needed only
+  to restore) stays offline. No weak-passphrase risk.
+- **Passphrase mode** — `-p` (TTY only). Simple, but security rides entirely on
+  the passphrase.
+- **Fail-closed** — with no recipient and no TTY (e.g. a misconfigured cron),
+  the tool *refuses* rather than silently falling back to weak/no encryption.
+
+```sh
+# generate a backup keypair once; keep the identity file offline
+age-keygen -o ~/anb-age-key.txt          # prints "Public key: age1..."
+
+export ANB_AGE_RECIPIENT=age1...         # public key — safe in env/cron
+anb-vault.sh backup both                 # → ~/anb-backups/anb-{alice,bob}-<UTC>.age, keeps newest 10
+anb-vault.sh backup bob -k 30            # bob only, keep 30
+anb-vault.sh list
+anb-vault.sh verify ~/anb-backups/anb-bob-<ts>.age -i ~/anb-age-key.txt
+```
+
+Output goes to `${ANB_BACKUP_DIR:-~/anb-backups}` (mode 700), files are 0600,
+named `anb-<side>-<UTCtimestamp>.age`. Retention (`-k`, default 10) prunes only
+regular backups per side; `prerestore` snapshots are never auto-pruned.
+
+### Restore is safe by construction
+
+1. The incoming archive is **verified first** (decrypt + manifest). A bad
+   archive aborts with your live config untouched.
+2. The current state is **snapshotted** to a `prerestore` age archive.
+3. The swap is **atomic**: old dir → `<dir>.bak-<ts>`, new state moved in,
+   `*.key` re-chmod'd to 0600. The tool prints a one-line rollback command.
+
+```sh
+export ANB_AGE_IDENTITY=~/anb-age-key.txt        # private key, to decrypt
+export ANB_BOB_PASSWORD=...                       # optional; else prompted on TTY at restart
+
+# bob: verify → snapshot current → stop daemon → swap → restart → alice status
+anb-vault.sh restore bob ~/anb-backups/anb-bob-<ts>.age
+
+# dry-run a restore into a temp dir without touching the live env or daemon:
+anb-vault.sh restore bob ~/anb-backups/anb-bob-<ts>.age -d /tmp/rt/bob --no-restart
+```
+
+`--addr` (default `127.0.0.1:8443`, or `$ANB_BOB_ADDR`) is the address used to
+restart bob; `--no-restart` skips the restart + status check; `--force` skips
+the interactive confirm.
+
+> Restoring `bob` writes plaintext private keys to `<dir>.bak-<ts>`. Once you've
+> confirmed `alice status` reports `unlocked`, delete those `.bak` dirs so
+> plaintext key copies don't linger.
+
+---
+
 ## Master key rotation (v2.6+)
 
 Since v2.6 Bob stores the master key as a **versioned set** (`envelope.json`
@@ -449,7 +525,7 @@ encrypted at rest. But two reasons to clean up:
 Routine workflow:
 
 ```sh
-scripts/anb-backup.sh bob /tmp/before-rotate.age      # 0. recovery snapshot
+scripts/anb-vault.sh backup bob                       # 0. recovery snapshot (see Backup & restore)
 
 bob rotate-master-password                            # 1. new pw + new K (default)
 # ... or: bob rotate-master-key                       #    new K only, no pw change
