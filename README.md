@@ -153,6 +153,67 @@ binary's embedded `runtime/debug.BuildInfo`.
 
 ## Quick start
 
+> **New here?** AnB lets your scripts and AI agents *use* secrets (API tokens,
+> DB passwords, kubeconfigs) without ever seeing the plaintext. You reference a
+> secret by name — `<agent-vault:KEY>` — and `alice` injects the real value into
+> a command or file at the last moment. The master key never lives on the client;
+> it stays inside a separate daemon (`bob`) you unlock once. Commands that *reveal*
+> values require a human terminal, so an agent — even hijacked by prompt
+> injection — structurally can't exfiltrate a secret.
+
+### Local quick start (5 minutes)
+
+Everything on one machine. (Multi-machine / over-a-network uses the out-of-band
+pairing flow detailed below.)
+
+```sh
+# install both binaries (Go 1.23+)
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@latest
+go install github.com/kaka-milan-22/AnB/v3/cmd/alice@latest
+
+# --- bob: private CA, wrapped master key, the mTLS daemon (operator, once) ---
+bob ca init                           # → ~/.anb/bob/{ca.crt,ca.key}
+bob init --host localhost             # prompts for a master password (or $ANB_BOB_PASSWORD)
+bob serve -D --addr 127.0.0.1:8443    # prompts password, then detaches
+                                      # stop later: kill $(cat ~/.anb/bob/bob.pid)
+
+# --- alice: enroll on the same box ---
+alice enroll --identity alice-local --bob localhost:8443 --ca ~/.anb/bob/ca.crt
+#   → writes ~/.anb/alice/client.csr
+bob sign-csr ~/.anb/alice/client.csr --out alice-local.crt --no-pair
+#   → asks: Sign "alice-local" without pairing? [y/N]   — type y
+alice install-cert ./alice-local.crt --no-pair
+alice status                          # → Bob status: unlocked
+
+# --- store a secret (human, TTY — `set` never runs non-interactively) ---
+alice set stripe-key                  # paste the value at the prompt
+```
+
+Then use it three ways — pick by *who* runs the command:
+
+```sh
+# (a) agent / script (no TTY): inject into a command — value is never printed.
+#     The command must be an ABSOLUTE path, and an operator must first bless a
+#     matching rule in ~/.anb/alice/exec-allowlist.rules (default-deny).
+alice exec --env STRIPE_KEY='<agent-vault:stripe-key>' \
+  -- /usr/bin/curl -sS -u "$STRIPE_KEY:" https://api.stripe.com/v1/charges
+
+# (b) render a file: placeholders → real values, written atomically
+printf 'token: <agent-vault:stripe-key>\n' | alice write ./config.yaml
+
+# (c) human one-off: reveal the value (TTY required)
+alice get stripe-key --reveal
+```
+
+**For AI agents:** install the bundled skill at `skills/anb-secrets/` into your
+agent (`~/.claude/skills/` or a project's `.claude/skills/`). It teaches the
+agent to use `list`/`read`/`write`/`exec` with `<agent-vault:KEY>` placeholders
+instead of trying to read plaintext — the full non-TTY command surface.
+
+---
+
+### Full setup (multi-machine, with out-of-band pairing)
+
 ### 1. Set up Bob (operator, once)
 
 ```sh
