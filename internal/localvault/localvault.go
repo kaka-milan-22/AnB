@@ -14,10 +14,26 @@ import (
 const Version = 1
 
 // SecretEntry mirrors agent-vault's shape; Value is Bob-produced ciphertext.
+// Fields after CreatedAt are additive (omitempty) so vault.json written by
+// older alices still loads and re-marshals cleanly; they populate on the next
+// set or rewrap.
 type SecretEntry struct {
 	Value     string `json:"value"` // iv:tag:ct from Bob
 	Desc      string `json:"desc,omitempty"`
 	CreatedAt string `json:"createdAt"`
+	// UpdatedAt is the last time the VALUE changed (RFC3339 UTC). Empty means
+	// the value hasn't changed since CreatedAt. Rewraps do NOT bump it — the
+	// plaintext is unchanged, only the wrapping KEK.
+	UpdatedAt string `json:"updatedAt,omitempty"`
+	// KeyEpoch is the KEK generation that wrapped Value, parsed from its
+	// "v<N>:" prefix. Lets `list` surface entries lagging the current KEK.
+	KeyEpoch int `json:"keyEpoch,omitempty"`
+	// ValueLen is a coarse byte-length bucket (e.g. "9-16"); EntropyBits is a
+	// charset-estimated, 8-bit-quantized strength figure. Both are intentionally
+	// imprecise — see internal/strength — so this cleartext metadata doesn't
+	// leak the secret's exact size/entropy.
+	ValueLen    string `json:"valueLen,omitempty"`
+	EntropyBits int    `json:"entropyBits,omitempty"`
 }
 
 type Vault struct {
@@ -148,8 +164,9 @@ func mustJSON(v any) []byte {
 // --- Vault helpers ---
 
 type Listing struct {
-	Key  string `json:"key"`
-	Desc string `json:"desc,omitempty"`
+	Key      string `json:"key"`
+	Desc     string `json:"desc,omitempty"`
+	KeyEpoch int    `json:"keyEpoch,omitempty"`
 }
 
 func (v *Vault) Has(key string) bool { _, ok := v.Secrets[key]; return ok }
@@ -170,7 +187,7 @@ func (v *Vault) Remove(key string) bool {
 func (v *Vault) List() []Listing {
 	out := make([]Listing, 0, len(v.Secrets))
 	for k, e := range v.Secrets {
-		out = append(out, Listing{Key: k, Desc: e.Desc})
+		out = append(out, Listing{Key: k, Desc: e.Desc, KeyEpoch: e.KeyEpoch})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out

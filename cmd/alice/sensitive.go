@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/ca"
+	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/pwgen"
 	"github.com/kaka-milan-22/AnB/v3/internal/redact"
+	"github.com/kaka-milan-22/AnB/v3/internal/strength"
 	"github.com/kaka-milan-22/AnB/v3/internal/term"
 )
 
@@ -132,11 +134,33 @@ func cmdSet(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Strength metadata is computed from the plaintext while it's still in
+	// memory, before it's handed to Bob; only coarse buckets are persisted.
+	valueLen := strength.LenBucket(len(value))
+	entropyBits := strength.EstimateBits(value)
 	packed, err := cl.Encrypt(key, value)
 	if err != nil {
 		return err
 	}
-	entry := localvault.SecretEntry{Value: packed, CreatedAt: nowStamp(), Desc: *desc}
+	// KeyEpoch is the KEK generation Bob wrapped under, carried in the packed
+	// "v<N>:" prefix (legacy/no-prefix ⇒ epoch 1).
+	epoch, _, _ := crypto.ParseVersion(packed)
+	now := nowStamp()
+	// Preserve the original CreatedAt on overwrite; UpdatedAt always records
+	// this write so created-vs-last-changed stay distinct.
+	createdAt := now
+	if already && existing.CreatedAt != "" {
+		createdAt = existing.CreatedAt
+	}
+	entry := localvault.SecretEntry{
+		Value:       packed,
+		Desc:        *desc,
+		CreatedAt:   createdAt,
+		UpdatedAt:   now,
+		KeyEpoch:    epoch,
+		ValueLen:    valueLen,
+		EntropyBits: entropyBits,
+	}
 	v.Set(key, entry)
 	if err := s.Save(v); err != nil {
 		return err
@@ -210,6 +234,18 @@ func cmdGet(args []string) error {
 		fmt.Printf("Desc:     %s\n", e.Desc)
 	}
 	fmt.Printf("Set at:   %s\n", e.CreatedAt)
+	if e.UpdatedAt != "" && e.UpdatedAt != e.CreatedAt {
+		fmt.Printf("Updated:  %s\n", e.UpdatedAt)
+	}
+	if e.KeyEpoch != 0 {
+		fmt.Printf("KEK gen:  %d\n", e.KeyEpoch)
+	}
+	if e.ValueLen != "" {
+		fmt.Printf("Length:   %s bytes\n", e.ValueLen)
+	}
+	if e.EntropyBits != 0 {
+		fmt.Printf("Strength: ~%d bit (%s)\n", e.EntropyBits, strength.Tier(e.EntropyBits))
+	}
 	return nil
 }
 

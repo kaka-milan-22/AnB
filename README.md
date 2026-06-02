@@ -325,6 +325,18 @@ alice list                       # list all stored keys
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
 
+# `alice get <key>` (no --reveal) prints metadata, never the value:
+#   Key:      stripe-key
+#   Desc:     prod payments
+#   Set at:   2026-06-02T13:25:19Z   # first stored
+#   Updated:  2026-06-02T18:40:02Z   # last value change (omitted if same as Set at)
+#   KEK gen:  2                      # KEK generation wrapping this entry
+#   Length:   17-32 bytes            # coarse bucket, never the exact size
+#   Strength: ~128 bit (excellent)   # charset-estimated, 8-bit-quantized
+# Length/Strength are intentionally coarse so this cleartext metadata can't
+# leak a short/weak secret's exact size. `alice list --json` also reports each
+# entry's keyEpoch, so you can spot entries lagging the current KEK.
+
 # Three ways to deliver a vault secret to a process. Pick by *who* runs the
 # command — see "Choosing between alice exec, alice shell, and alice get"
 # below. NOTE: single-quote --env values so the shell doesn't expand `<` / `>`.
