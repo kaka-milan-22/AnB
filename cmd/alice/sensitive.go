@@ -245,7 +245,12 @@ func cmdGet(args []string) error {
 		fmt.Printf("Length:   %d bytes\n", e.LenBytes)
 	}
 	if e.EntropyBits != 0 {
-		fmt.Printf("Strength: ~%d bit (%s)\n", e.EntropyBits, strength.Tier(e.EntropyBits))
+		tier := strength.Tier(e.EntropyBits)
+		warn := ""
+		if tier == "weak" {
+			warn = "  ⚠ weak — consider rotating"
+		}
+		fmt.Printf("Strength: ~%d bit (%s)%s\n", e.EntropyBits, tier, warn)
 	}
 	return nil
 }

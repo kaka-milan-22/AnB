@@ -165,9 +165,11 @@ func mustJSON(v any) []byte {
 // --- Vault helpers ---
 
 type Listing struct {
-	Key      string `json:"key"`
-	Desc     string `json:"desc,omitempty"`
-	KeyEpoch int    `json:"keyEpoch,omitempty"`
+	Key         string `json:"key"`
+	Desc        string `json:"desc,omitempty"`
+	KeyEpoch    int    `json:"keyEpoch,omitempty"`
+	LenBytes    int    `json:"lenBytes,omitempty"`
+	EntropyBits int    `json:"entropyBits,omitempty"`
 }
 
 func (v *Vault) Has(key string) bool { _, ok := v.Secrets[key]; return ok }
@@ -188,7 +190,7 @@ func (v *Vault) Remove(key string) bool {
 func (v *Vault) List() []Listing {
 	out := make([]Listing, 0, len(v.Secrets))
 	for k, e := range v.Secrets {
-		out = append(out, Listing{Key: k, Desc: e.Desc, KeyEpoch: e.KeyEpoch})
+		out = append(out, Listing{Key: k, Desc: e.Desc, KeyEpoch: e.KeyEpoch, LenBytes: e.LenBytes, EntropyBits: e.EntropyBits})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out

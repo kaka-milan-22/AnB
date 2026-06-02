@@ -9,9 +9,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/redact"
+	"github.com/kaka-milan-22/AnB/v3/internal/strength"
 )
 
 var unvaultedMarker = regexp.MustCompile(`<agent-vault:UNVAULTED:sha256:[a-f0-9]{8,16}>`)
@@ -188,11 +190,15 @@ func cmdHas(args []string) error {
 	return nil
 }
 
-// list — list key names (local metadata).
+// list — list key names (local metadata). -l/--long adds the stored
+// per-entry metadata columns (length, strength, KEK gen) without decrypting.
 func cmdList(args []string) error {
 	fs := newFS("list")
 	dir := dirFlag(fs)
 	asJSON := fs.Bool("json", false, "output as JSON")
+	var long bool
+	fs.BoolVar(&long, "l", false, "long format: show length, strength, and KEK gen columns")
+	fs.BoolVar(&long, "long", false, "alias for -l")
 	parse(fs, args)
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -205,10 +211,30 @@ func cmdList(args []string) error {
 		fmt.Println(string(b))
 		return nil
 	}
-	for _, l := range listing {
-		fmt.Println(l.Key)
+	if !long {
+		for _, l := range listing {
+			fmt.Println(l.Key)
+		}
+		return nil
 	}
-	return nil
+	// Long format. Metadata shows "—" for entries predating it (run
+	// `alice backfill-meta` to populate them).
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "KEY\tLENGTH\tSTRENGTH\tKEK\tDESC")
+	for _, l := range listing {
+		length, strg, kek := "—", "—", "—"
+		if l.LenBytes != 0 {
+			length = fmt.Sprintf("%d", l.LenBytes)
+		}
+		if l.EntropyBits != 0 {
+			strg = fmt.Sprintf("~%d (%s)", l.EntropyBits, strength.Tier(l.EntropyBits))
+		}
+		if l.KeyEpoch != 0 {
+			kek = fmt.Sprintf("v%d", l.KeyEpoch)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", l.Key, length, strg, kek, l.Desc)
+	}
+	return tw.Flush()
 }
 
 // status — enrollment + Bob reachability/unlock state.

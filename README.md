@@ -321,9 +321,12 @@ alice set stripe-key
 alice set db-url --from-env DATABASE_URL
 
 # list / inspect
-alice list                       # list all stored keys
+alice list                       # list all stored key names
+alice list -l                    # long: KEY / LENGTH / STRENGTH / KEK / DESC columns
 alice get stripe-key             # metadata only
 alice get stripe-key --reveal    # shows the value (TTY required)
+alice audit                      # local hygiene scan: weak / stale-KEK / missing-metadata
+alice audit --strict             # same, but exit non-zero if anything is flagged (CI)
 
 # `alice get <key>` (no --reveal) prints metadata, never the value:
 #   Key:      stripe-key

@@ -65,7 +65,7 @@ func main() {
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
 		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus, "rekey-from-zero": cmdRekeyFromZero,
-		"backfill-meta": cmdBackfillMeta,
+		"backfill-meta": cmdBackfillMeta, "audit": cmdAudit,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 		"allowlist-check": cmdAllowlistCheck,
 		"eth":             cmdEth,
@@ -113,7 +113,7 @@ func usage() {
 	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
 	fmt.Fprintf(w, row, "write [options] <file>", "Write a file, restoring <agent-vault:key> placeholders (safe for agents)")
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
-	fmt.Fprintf(w, row, "list [options]", "List all stored secret key names (safe for agents)")
+	fmt.Fprintf(w, row, "list [-l] [--json]", "List secret key names; -l adds length/strength/KEK columns (safe for agents)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
 	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
 	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret (safe; non-TTY needs --from-env/--stdin/--generate)")
@@ -129,6 +129,7 @@ func usage() {
 	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
 	fmt.Fprintf(w, row, "rekey-from-zero [--dry-run]", "ONE-SHOT: re-encrypt vault entries written under the v2.0–v2.5 zero-K bug")
 	fmt.Fprintf(w, row, "backfill-meta [--reason R]", "Populate lenBytes/entropyBits/keyEpoch for pre-existing secrets (measures only, never reveals)")
+	fmt.Fprintf(w, row, "audit [--strict]", "Local hygiene scan: flag weak / stale-KEK / metadata-missing secrets")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 	fmt.Fprintf(w, row, "allowlist-check [opts]", "Lint exec-allowlist.rules — report dangerous patterns")
