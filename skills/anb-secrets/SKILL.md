@@ -1,6 +1,6 @@
 ---
 name: anb-secrets
-description: Use when an AI agent needs to work with secrets kept in AnB / alice (the agent-vault successor) — running a command that needs an API token / DB password / kubeconfig, writing or rendering a config file that embeds secrets, auditing a file for leaked secrets, storing or rotating a secret, or checking what exists. Keywords: alice, AnB, agent-vault, secret, vault, <agent-vault:key> placeholder, exec allowlist, mTLS KMS, ANB_BOB.
+description: Use when an AI agent needs to work with secrets kept in AnB / alice (the agent-vault successor) — running a command that needs an API token / DB password / kubeconfig, writing or rendering a config file that embeds secrets, auditing a file for leaked secrets, storing or rotating a secret, checking what exists, or auditing secret hygiene (weak / stale-KEK / missing-metadata entries). Keywords: alice, AnB, agent-vault, secret, vault, <agent-vault:key> placeholder, exec allowlist, mTLS KMS, ANB_BOB, alice audit, list -l, backfill-meta, secret strength, weak secret, KEK gen.
 ---
 
 # AnB secrets (alice) for agents
@@ -19,9 +19,10 @@ human TTY, so you can't casually dump plaintext.
 **Read / inspect (no writes):**
 | Command | Use it to |
 |---|---|
-| `alice list [--json]` | See which secret names exist (no values). |
+| `alice list [-l] [--json]` | See which secret names exist (no values). `-l` adds length / strength / KEK-gen columns; `--json` includes those fields too. |
 | `alice has KEY... [--json]` | Check specific keys exist. |
-| `alice get KEY` | Show a secret's **metadata** (no value). |
+| `alice get KEY` | Show a secret's **metadata** (no value): desc, set + last-updated time, KEK gen, exact length, strength estimate (`⚠ weak` flagged). |
+| `alice audit [--strict]` | Local hygiene scan over stored metadata (no values): flags weak secrets, entries lagging the newest KEK gen, and entries missing metadata. `--strict` exits non-zero on any finding (CI). |
 | `alice status` | Check bob is reachable + unlocked. |
 | `alice read FILE` | Read a file with secrets masked to placeholders. |
 | `alice scan FILE [--json]` | Audit a file for vaulted + suspected-unvaulted secrets (output is redacted — line numbers + key names, no values). |
@@ -41,6 +42,7 @@ human TTY, so you can't casually dump plaintext.
 | `alice import FILE --yes` | Bulk-import a `.env`. `--yes` required when non-interactive. |
 | `alice init` | Initialize an empty vault. |
 | `alice rm KEY --yes` | Remove a secret. `--yes` required when non-interactive. See caveat below. |
+| `alice backfill-meta [--reason R]` | Populate length/strength/KEK-gen for secrets stored before those fields existed. Decrypts each entry only to **measure** it (value never printed); leaves set/updated times untouched; applies any lazy rewrap. Idempotent. Needs Bob + decrypt authz on every key. |
 
 ## What you CANNOT run (human-only, TTY required)
 
@@ -58,6 +60,7 @@ Only two:
 3. **Audit before committing** — `alice scan FILE` to catch leaked/hardcoded secrets; replace hits with `<agent-vault:KEY>` placeholders.
 4. **Store / rotate** — `alice gen --style aes256 | alice set new-key --stdin --force`, or `alice set token --from-env CI_TOKEN`.
 5. **Plan** — `alice list` + `alice status` before wiring anything.
+6. **Audit hygiene** — `alice audit` to spot weak / stale-KEK / metadata-missing secrets; then `alice backfill-meta` for any missing metadata and `alice rekey` for stale-KEK entries. (Username-type entries flagged "weak" are usually fine — they aren't passwords.)
 
 ## Pattern: drive an external crypto tool with a vault-held key
 
