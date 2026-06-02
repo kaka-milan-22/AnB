@@ -135,8 +135,9 @@ func cmdSet(args []string) error {
 		return err
 	}
 	// Strength metadata is computed from the plaintext while it's still in
-	// memory, before it's handed to Bob; only coarse buckets are persisted.
-	valueLen := strength.LenBucket(len(value))
+	// memory, before it's handed to Bob. Length is exact (the ciphertext
+	// already leaks it); only the entropy estimate is coarsened.
+	lenBytes := len(value)
 	entropyBits := strength.EstimateBits(value)
 	packed, err := cl.Encrypt(key, value)
 	if err != nil {
@@ -158,7 +159,7 @@ func cmdSet(args []string) error {
 		CreatedAt:   createdAt,
 		UpdatedAt:   now,
 		KeyEpoch:    epoch,
-		ValueLen:    valueLen,
+		LenBytes:    lenBytes,
 		EntropyBits: entropyBits,
 	}
 	v.Set(key, entry)
@@ -240,8 +241,8 @@ func cmdGet(args []string) error {
 	if e.KeyEpoch != 0 {
 		fmt.Printf("KEK gen:  %d\n", e.KeyEpoch)
 	}
-	if e.ValueLen != "" {
-		fmt.Printf("Length:   %s bytes\n", e.ValueLen)
+	if e.LenBytes != 0 {
+		fmt.Printf("Length:   %d bytes\n", e.LenBytes)
 	}
 	if e.EntropyBits != 0 {
 		fmt.Printf("Strength: ~%d bit (%s)\n", e.EntropyBits, strength.Tier(e.EntropyBits))

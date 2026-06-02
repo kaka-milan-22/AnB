@@ -1,9 +1,9 @@
-// Package strength derives coarse, non-revealing metadata about a secret's
-// plaintext: a charset-based entropy estimate and a length bucket. Both are
-// intentionally quantized — a vault stores this metadata in cleartext alongside
-// the ciphertext, so exact length/entropy would be a side-channel about the
-// secret. EstimateBits answers "roughly how strong is this" without pinning the
-// value (e.g. distinguishing a 5-char "admin" from a 6-char one).
+// Package strength derives a coarse, non-revealing strength signal for a
+// secret's plaintext: a charset-based entropy estimate, quantized to 8-bit
+// rungs and capped. It is kept coarse because charset composition is NOT
+// recoverable from the stored ciphertext, so an exact figure would be a small
+// side-channel. (Exact length, by contrast, is already implied by the GCM
+// ciphertext's length, so callers store that precisely — see localvault.)
 //
 // The metric is charset-estimated bits: len × log2(effective charset size),
 // the conventional password-strength number. Known limitation: it OVER-counts
@@ -90,24 +90,5 @@ func Tier(bits int) string {
 		return "strong"
 	default:
 		return "excellent"
-	}
-}
-
-// LenBucket maps a byte length to a coarse range label. Buckets, not exact
-// counts, so the stored metadata can't pin a short secret's length.
-func LenBucket(n int) string {
-	switch {
-	case n <= 0:
-		return ""
-	case n <= 8:
-		return "1-8"
-	case n <= 16:
-		return "9-16"
-	case n <= 32:
-		return "17-32"
-	case n <= 64:
-		return "33-64"
-	default:
-		return "65+"
 	}
 }

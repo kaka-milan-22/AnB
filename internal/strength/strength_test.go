@@ -2,25 +2,6 @@ package strength
 
 import "testing"
 
-func TestLenBucket(t *testing.T) {
-	cases := []struct {
-		n    int
-		want string
-	}{
-		{-1, ""}, {0, ""},
-		{1, "1-8"}, {5, "1-8"}, {8, "1-8"},
-		{9, "9-16"}, {16, "9-16"},
-		{17, "17-32"}, {32, "17-32"},
-		{33, "33-64"}, {64, "33-64"},
-		{65, "65+"}, {4096, "65+"},
-	}
-	for _, c := range cases {
-		if got := LenBucket(c.n); got != c.want {
-			t.Errorf("LenBucket(%d) = %q, want %q", c.n, got, c.want)
-		}
-	}
-}
-
 func TestEstimateBitsQuantizedAndCapped(t *testing.T) {
 	// Every estimate must be a multiple of 8 (coarse) and never exceed the cap.
 	for _, s := range []string{"", "a", "admin", "123456", "Tr0ub4dor&3xtra!!", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"} {

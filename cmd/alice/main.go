@@ -266,7 +266,7 @@ func applyRewraps(s *localvault.Store, keys, rewrapped []string) (int, error) {
 		}
 		e.Value = rewrapped[i]
 		// The plaintext is unchanged — only the wrapping KEK moved forward, so
-		// refresh KeyEpoch but leave UpdatedAt/ValueLen/EntropyBits as-is.
+		// refresh KeyEpoch but leave UpdatedAt/LenBytes/EntropyBits as-is.
 		if epoch, _, perr := crypto.ParseVersion(rewrapped[i]); perr == nil {
 			e.KeyEpoch = epoch
 		}

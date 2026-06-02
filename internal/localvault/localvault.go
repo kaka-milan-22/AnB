@@ -28,12 +28,13 @@ type SecretEntry struct {
 	// KeyEpoch is the KEK generation that wrapped Value, parsed from its
 	// "v<N>:" prefix. Lets `list` surface entries lagging the current KEK.
 	KeyEpoch int `json:"keyEpoch,omitempty"`
-	// ValueLen is a coarse byte-length bucket (e.g. "9-16"); EntropyBits is a
-	// charset-estimated, 8-bit-quantized strength figure. Both are intentionally
-	// imprecise — see internal/strength — so this cleartext metadata doesn't
-	// leak the secret's exact size/entropy.
-	ValueLen    string `json:"valueLen,omitempty"`
-	EntropyBits int    `json:"entropyBits,omitempty"`
+	// LenBytes is the exact plaintext byte length. Not a side-channel: the
+	// AES-GCM ciphertext in Value already reveals it (GCM adds no padding, so
+	// len(ct) == len(plaintext)), so bucketing it would hide nothing. EntropyBits
+	// is a charset-estimated, 8-bit-quantized strength figure — kept coarse
+	// because charset composition is NOT recoverable from the ciphertext.
+	LenBytes    int `json:"lenBytes,omitempty"`
+	EntropyBits int `json:"entropyBits,omitempty"`
 }
 
 type Vault struct {

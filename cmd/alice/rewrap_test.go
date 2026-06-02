@@ -7,7 +7,7 @@ import (
 )
 
 // applyRewraps must refresh KeyEpoch from the new packed prefix while leaving
-// the value-derived metadata (UpdatedAt, ValueLen, EntropyBits, CreatedAt)
+// the value-derived metadata (UpdatedAt, LenBytes, EntropyBits, CreatedAt)
 // untouched — a rewrap moves the wrapping KEK forward but the plaintext is
 // unchanged.
 func TestApplyRewrapsBumpsKeyEpochOnly(t *testing.T) {
@@ -22,7 +22,7 @@ func TestApplyRewrapsBumpsKeyEpochOnly(t *testing.T) {
 		CreatedAt:   "created",
 		UpdatedAt:   "updated",
 		KeyEpoch:    1,
-		ValueLen:    "9-16",
+		LenBytes:    13,
 		EntropyBits: 80,
 	})
 	if err := s.Save(v); err != nil {
@@ -51,7 +51,7 @@ func TestApplyRewrapsBumpsKeyEpochOnly(t *testing.T) {
 	if e.CreatedAt != "created" || e.UpdatedAt != "updated" {
 		t.Errorf("timestamps changed on rewrap: CreatedAt=%q UpdatedAt=%q", e.CreatedAt, e.UpdatedAt)
 	}
-	if e.ValueLen != "9-16" || e.EntropyBits != 80 {
-		t.Errorf("strength metadata changed on rewrap: ValueLen=%q EntropyBits=%d", e.ValueLen, e.EntropyBits)
+	if e.LenBytes != 13 || e.EntropyBits != 80 {
+		t.Errorf("strength metadata changed on rewrap: LenBytes=%d EntropyBits=%d", e.LenBytes, e.EntropyBits)
 	}
 }
