@@ -337,6 +337,11 @@ alice get stripe-key --reveal    # shows the value (TTY required)
 # to hide. Strength is kept coarse (charset composition is NOT recoverable from
 # the ciphertext). `alice list --json` also reports each entry's keyEpoch, so
 # you can spot entries lagging the current KEK.
+#
+# Secrets stored before these fields existed show only Key/Set at. To populate
+# them in one pass (Bob decrypts each entry to MEASURE it; values are never
+# printed; createdAt/updatedAt are untouched):
+#   alice backfill-meta
 
 # Three ways to deliver a vault secret to a process. Pick by *who* runs the
 # command — see "Choosing between alice exec, alice shell, and alice get"
