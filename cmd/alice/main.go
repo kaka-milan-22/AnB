@@ -64,7 +64,7 @@ func main() {
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
-		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus, "rekey-from-zero": cmdRekeyFromZero,
+		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus,
 		"backfill-meta": cmdBackfillMeta, "audit": cmdAudit,
 		"enroll": cmdEnroll, "install-cert": cmdInstallCert,
 		"allowlist-check": cmdAllowlistCheck,
@@ -127,7 +127,6 @@ func usage() {
 	fmt.Fprintf(w, row, "shell [--env K=V]... [-- shell]", "Sub-shell with --env injected; TTY-only (human only)")
 	fmt.Fprintf(w, row, "rekey-status", "Show per-K-version entry counts in vault.json (local)")
 	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
-	fmt.Fprintf(w, row, "rekey-from-zero [--dry-run]", "ONE-SHOT: re-encrypt vault entries written under the v2.0–v2.5 zero-K bug")
 	fmt.Fprintf(w, row, "backfill-meta [--reason R]", "Populate lenBytes/entropyBits/keyEpoch for pre-existing secrets (measures only, never reveals)")
 	fmt.Fprintf(w, row, "audit [--strict]", "Local hygiene scan: flag weak / stale-KEK / metadata-missing secrets")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
