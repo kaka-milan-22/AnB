@@ -97,3 +97,10 @@ alice exec --env ENCIPHERR_KEY='<agent-vault:encipherr-key>' -- "$EC" decrypt fi
 
 If every command errors, alice may not be enrolled or bob may be down — run
 `alice status`. Enrollment and `bob serve` are operator tasks; see the AnB README.
+
+One newer failure mode (v3.3.11+): **`bob serve` fails closed when `authz.json`
+is missing** — an unconfigured Bob refuses to start rather than silently running
+allow-all. So "cannot reach Bob" can mean the operator's daemon never came up
+for lack of an `authz.json`. That's an operator fix (create `authz.json`, or run
+`bob serve --insecure-allow-all` for local/dev) — surface it to the human, don't
+retry.
