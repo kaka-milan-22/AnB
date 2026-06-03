@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +45,12 @@ func cmdSet(args []string) error {
 		return fmt.Errorf("usage: alice set <key> [flags]")
 	}
 	key := pos[0]
+	descProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "desc" {
+			descProvided = true
+		}
+	})
 
 	// --stdin reads the value from a pipe; stdout only carries the "✓ Saved"
 	// confirmation, NOT the secret. No TTY required — scripts and CI can
@@ -150,12 +158,20 @@ func cmdSet(args []string) error {
 	// Preserve the original CreatedAt on overwrite; UpdatedAt always records
 	// this write so created-vs-last-changed stay distinct.
 	createdAt := now
-	if already && existing.CreatedAt != "" {
-		createdAt = existing.CreatedAt
+	descVal := *desc
+	if already {
+		if existing.CreatedAt != "" {
+			createdAt = existing.CreatedAt
+		}
+		// Preserve the existing description on overwrite unless --desc was
+		// explicitly given (so a re-set doesn't silently wipe it).
+		if !descProvided {
+			descVal = existing.Desc
+		}
 	}
 	entry := localvault.SecretEntry{
 		Value:       packed,
-		Desc:        *desc,
+		Desc:        descVal,
 		CreatedAt:   createdAt,
 		UpdatedAt:   now,
 		KeyEpoch:    epoch,
@@ -171,6 +187,8 @@ func cmdSet(args []string) error {
 		suffix = fmt.Sprintf(" [generated: %s]", *genStyle)
 	}
 	fmt.Printf("✓ Saved %q%s\n", key, suffix)
+	// Echo the strength so a weak value is caught at creation time.
+	fmt.Printf("  %d bytes, ~%d bit (%s)%s\n", lenBytes, entropyBits, strength.Tier(entropyBits), weakSuffix(entropyBits))
 	return nil
 }
 
@@ -196,10 +214,14 @@ func cmdGet(args []string) error {
 	fs := newFS("get")
 	dir := dirFlag(fs)
 	reveal := fs.Bool("reveal", false, "show the actual secret value")
+	asJSON := fs.Bool("json", false, "print metadata as JSON (not compatible with --reveal)")
 	reason := fs.String("reason", "", `audit-only "why" string; logged in Bob's ALLOW line`)
 	pos := parse(fs, args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice get <key> [--reveal] [--reason R]")
+		return fmt.Errorf("usage: alice get <key> [--reveal | --json] [--reason R]")
+	}
+	if *reveal && *asJSON {
+		return fmt.Errorf("--reveal and --json are mutually exclusive (--json is metadata only)")
 	}
 	key := pos[0]
 	s := localvault.Open(*dir)
@@ -210,6 +232,29 @@ func cmdGet(args []string) error {
 	e, ok := v.Get(key)
 	if !ok {
 		return fmt.Errorf("secret %q not found", key)
+	}
+	if *asJSON {
+		meta := map[string]any{"key": key}
+		if e.Desc != "" {
+			meta["desc"] = e.Desc
+		}
+		meta["createdAt"] = e.CreatedAt
+		if e.UpdatedAt != "" {
+			meta["updatedAt"] = e.UpdatedAt
+		}
+		if e.KeyEpoch != 0 {
+			meta["keyEpoch"] = e.KeyEpoch
+		}
+		if e.LenBytes != 0 {
+			meta["lenBytes"] = e.LenBytes
+		}
+		if e.EntropyBits != 0 {
+			meta["entropyBits"] = e.EntropyBits
+			meta["strength"] = strength.Tier(e.EntropyBits)
+		}
+		b, _ := json.MarshalIndent(meta, "", "  ")
+		fmt.Println(string(b))
+		return nil
 	}
 	if *reveal {
 		requireStdoutTTY("alice get --reveal")
@@ -245,14 +290,18 @@ func cmdGet(args []string) error {
 		fmt.Printf("Length:   %d bytes\n", e.LenBytes)
 	}
 	if e.EntropyBits != 0 {
-		tier := strength.Tier(e.EntropyBits)
-		warn := ""
-		if tier == "weak" {
-			warn = "  ⚠ weak — consider rotating"
-		}
-		fmt.Printf("Strength: ~%d bit (%s)%s\n", e.EntropyBits, tier, warn)
+		fmt.Printf("Strength: ~%d bit (%s)%s\n", e.EntropyBits, strength.Tier(e.EntropyBits), weakSuffix(e.EntropyBits))
 	}
 	return nil
+}
+
+// weakSuffix returns a red "⚠ weak" hint (TTY-aware) for a weak-tier bit count,
+// or "" otherwise. Shared by `get` and `set`'s post-save echo.
+func weakSuffix(bits int) string {
+	if strength.Tier(bits) == "weak" {
+		return "  " + red("⚠ weak — consider rotating")
+	}
+	return ""
 }
 
 // rm <key> — remove a secret (human only).
@@ -261,8 +310,69 @@ func cmdRm(args []string) error {
 	dir := dirFlag(fs)
 	yes := fs.Bool("yes", false, "skip the confirm prompt (required when non-interactive)")
 	pos := parse(fs, args)
-	if len(pos) != 1 {
-		return fmt.Errorf("usage: alice rm <key> [--yes]")
+	if len(pos) == 0 {
+		return fmt.Errorf("usage: alice rm <key|glob>... [--yes]")
+	}
+	s := localvault.Open(*dir)
+	v, err := s.Load()
+	if err != nil {
+		return err
+	}
+	// Each arg is an exact key if it exists, otherwise a shell-style glob
+	// (e.g. 'test-*') matched against the stored names. Results are deduped.
+	matched := map[string]struct{}{}
+	for _, pat := range pos {
+		if v.Has(pat) {
+			matched[pat] = struct{}{}
+			continue
+		}
+		hits := matchKeys(v, pat)
+		if len(hits) == 0 {
+			return fmt.Errorf("no secret matches %q", pat)
+		}
+		for _, k := range hits {
+			matched[k] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(matched))
+	for k := range matched {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	if !*yes {
+		if !term.StdinIsTTY() {
+			return fmt.Errorf("refusing to remove %d secret(s) non-interactively without --yes", len(keys))
+		}
+		fmt.Printf("About to remove %d secret%s:\n", len(keys), plural(len(keys)))
+		for _, k := range keys {
+			fmt.Printf("  %s\n", k)
+		}
+		if ok, _ := term.Confirm("Proceed?", false); !ok {
+			fmt.Println("Cancelled")
+			return nil
+		}
+	}
+	for _, k := range keys {
+		v.Remove(k)
+	}
+	if err := s.Save(v); err != nil {
+		return err
+	}
+	fmt.Printf("✓ Removed %d secret%s\n", len(keys), plural(len(keys)))
+	return nil
+}
+
+// desc <key> [text...] — show, set, or clear a secret's description. Pure
+// local metadata: no Bob, no decryption, value and other metadata untouched.
+// `alice desc k` shows it; `alice desc k some text` sets it; `--clear` empties it.
+func cmdDesc(args []string) error {
+	fs := newFS("desc")
+	dir := dirFlag(fs)
+	clear := fs.Bool("clear", false, "clear the description")
+	pos := parse(fs, args)
+	if len(pos) == 0 {
+		return fmt.Errorf("usage: alice desc <key> [text...] | alice desc <key> --clear")
 	}
 	key := pos[0]
 	s := localvault.Open(*dir)
@@ -270,24 +380,46 @@ func cmdRm(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !v.Has(key) {
+	e, ok := v.Get(key)
+	if !ok {
 		return fmt.Errorf("secret %q not found", key)
 	}
-	if !*yes {
-		if !term.StdinIsTTY() {
-			return fmt.Errorf("refusing to remove %q non-interactively without --yes", key)
+	// Read-only: no text and no --clear → print the current description.
+	if len(pos) == 1 && !*clear {
+		if e.Desc == "" {
+			fmt.Println("(no description)")
+		} else {
+			fmt.Println(e.Desc)
 		}
-		if ok, _ := term.Confirm(fmt.Sprintf("Remove %q?", key), false); !ok {
-			fmt.Println("Cancelled")
-			return nil
-		}
+		return nil
 	}
-	v.Remove(key)
+	if *clear {
+		e.Desc = ""
+	} else {
+		e.Desc = strings.Join(pos[1:], " ")
+	}
+	v.Set(key, e)
 	if err := s.Save(v); err != nil {
 		return err
 	}
-	fmt.Printf("✓ Removed %q\n", key)
+	if e.Desc == "" {
+		fmt.Printf("✓ Cleared description for %q\n", key)
+	} else {
+		fmt.Printf("✓ Set description for %q\n", key)
+	}
 	return nil
+}
+
+// matchKeys returns the sorted stored key names matching a shell-style glob.
+// A pattern with no wildcards matches only its exact literal.
+func matchKeys(v *localvault.Vault, pattern string) []string {
+	var out []string
+	for _, l := range v.List() {
+		if ok, err := filepath.Match(pattern, l.Key); err == nil && ok {
+			out = append(out, l.Key)
+		}
+	}
+	return out
 }
 
 // init — initialize an empty local vault (human only).

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -199,13 +200,23 @@ func cmdList(args []string) error {
 	var long bool
 	fs.BoolVar(&long, "l", false, "long format: show length, strength, and KEK gen columns")
 	fs.BoolVar(&long, "long", false, "alias for -l")
-	parse(fs, args)
+	pos := parse(fs, args)
 	s := localvault.Open(*dir)
 	v, err := s.Load()
 	if err != nil {
 		return err
 	}
 	listing := v.List()
+	// Optional shell-style glob filter: `alice list 'test-*'`.
+	if len(pos) > 0 {
+		var f []localvault.Listing
+		for _, l := range listing {
+			if ok, merr := filepath.Match(pos[0], l.Key); merr == nil && ok {
+				f = append(f, l)
+			}
+		}
+		listing = f
+	}
 	if *asJSON {
 		b, _ := json.MarshalIndent(map[string]any{"keys": listing}, "", "  ")
 		fmt.Println(string(b))

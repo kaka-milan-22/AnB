@@ -19,10 +19,10 @@ human TTY, so you can't casually dump plaintext.
 **Read / inspect (no writes):**
 | Command | Use it to |
 |---|---|
-| `alice list [-l] [--json]` | See which secret names exist (no values). `-l` adds length / strength / KEK-gen columns; `--json` includes those fields too. |
+| `alice list [-l] [--json] [glob]` | See which secret names exist (no values). `-l` adds length / strength / KEK-gen columns; `--json` includes those fields; a glob (e.g. `'kfk-*'`) filters names. |
 | `alice has KEY... [--json]` | Check specific keys exist. |
-| `alice get KEY` | Show a secret's **metadata** (no value): desc, set + last-updated time, KEK gen, exact length, strength estimate (`⚠ weak` flagged). |
-| `alice audit [--strict]` | Local hygiene scan over stored metadata (no values): flags weak secrets, entries lagging the newest KEK gen, and entries missing metadata. `--strict` exits non-zero on any finding (CI). |
+| `alice get KEY [--json]` | Show a secret's **metadata** (no value): desc, set + last-updated time, KEK gen, exact length, strength estimate (`⚠ weak` flagged). `--json` for machine parsing. |
+| `alice audit [--strict] [--ignore G,…]` | Local hygiene scan over stored metadata (no values): flags weak secrets, entries lagging the newest KEK gen, and entries missing metadata. `--strict` exits non-zero on any finding (CI); `--ignore` drops matching globs (e.g. `'*user*'`). |
 | `alice status` | Check bob is reachable + unlocked. |
 | `alice read FILE` | Read a file with secrets masked to placeholders. |
 | `alice scan FILE [--json]` | Audit a file for vaulted + suspected-unvaulted secrets (output is redacted — line numbers + key names, no values). |
@@ -41,7 +41,8 @@ human TTY, so you can't casually dump plaintext.
 | `alice gen [--style apple\|full\|passphrase\|pin\|aes256] [-l N]` | Generate random password(s) to stdout (no vault access). |
 | `alice import FILE --yes` | Bulk-import a `.env`. `--yes` required when non-interactive. |
 | `alice init` | Initialize an empty vault. |
-| `alice rm KEY --yes` | Remove a secret. `--yes` required when non-interactive. See caveat below. |
+| `alice desc KEY [text] [--clear]` | Show/set/clear a secret's description. Pure local metadata — no Bob, no decryption, value untouched. |
+| `alice rm KEY\|glob... --yes` | Remove one or more secrets (globs + multiple names; e.g. `alice rm 'tmp-*' old --yes`). `--yes` required when non-interactive. See caveat below. |
 | `alice backfill-meta [--reason R]` | Populate length/strength/KEK-gen for secrets stored before those fields existed. Decrypts each entry only to **measure** it (value never printed); leaves set/updated times untouched; applies any lazy rewrap. Idempotent. Needs Bob + decrypt authz on every key. |
 
 ## What you CANNOT run (human-only, TTY required)

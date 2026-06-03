@@ -62,7 +62,8 @@ func main() {
 
 	cmds := map[string]func([]string) error{
 		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
-		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "import": cmdImport, "gen": cmdGen,
+		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "desc": cmdDesc, "import": cmdImport, "gen": cmdGen,
+		"completion": cmdCompletion, "__complete-keys": cmdCompleteKeys,
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
 		"rekey": cmdRekey, "rekey-status": cmdRekeyStatus,
 		"backfill-meta": cmdBackfillMeta, "audit": cmdAudit,
@@ -113,12 +114,13 @@ func usage() {
 	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
 	fmt.Fprintf(w, row, "write [options] <file>", "Write a file, restoring <agent-vault:key> placeholders (safe for agents)")
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
-	fmt.Fprintf(w, row, "list [-l] [--json]", "List secret key names; -l adds length/strength/KEK columns (safe for agents)")
+	fmt.Fprintf(w, row, "list [-l] [--json] [glob]", "List secret key names; -l adds length/strength/KEK columns; glob filters (safe)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
 	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
 	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret (safe; non-TTY needs --from-env/--stdin/--generate)")
-	fmt.Fprintf(w, row, "get [options] <key>", "View metadata (safe); --reveal prints the value (TTY only)")
-	fmt.Fprintf(w, row, "rm <key> [--yes]", "Remove a secret from the vault (safe for agents with --yes)")
+	fmt.Fprintf(w, row, "get [options] <key>", "View metadata (safe); --json for scripts; --reveal prints the value (TTY only)")
+	fmt.Fprintf(w, row, "desc <key> [text] [--clear]", "Show/set/clear a secret's description (local metadata only)")
+	fmt.Fprintf(w, row, "rm <key|glob>... [--yes]", "Remove one or more secrets (globs allowed; safe for agents with --yes)")
 	fmt.Fprintf(w, row, "import [options] <file>", "Import secrets from a .env file (safe for agents with --yes)")
 	fmt.Fprintf(w, row, "gen [options]", "Generate random passwords: --style apple|full|passphrase|pin|aes256 (safe)")
 	fmt.Fprintf(w, row, "init", "Initialize a new vault (safe for agents)")
@@ -128,7 +130,8 @@ func usage() {
 	fmt.Fprintf(w, row, "rekey-status", "Show per-K-version entry counts in vault.json (local)")
 	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
 	fmt.Fprintf(w, row, "backfill-meta [--reason R]", "Populate lenBytes/entropyBits/keyEpoch for pre-existing secrets (measures only, never reveals)")
-	fmt.Fprintf(w, row, "audit [--strict]", "Local hygiene scan: flag weak / stale-KEK / metadata-missing secrets")
+	fmt.Fprintf(w, row, "audit [--strict] [--ignore G]", "Local hygiene scan: flag weak / stale-KEK / metadata-missing secrets")
+	fmt.Fprintf(w, row, "completion <zsh|bash>", "Print a shell completion script (completes commands + key names)")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
 	fmt.Fprintf(w, row, "allowlist-check [opts]", "Lint exec-allowlist.rules — report dangerous patterns")

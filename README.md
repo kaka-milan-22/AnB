@@ -323,10 +323,16 @@ alice set db-url --from-env DATABASE_URL
 # list / inspect
 alice list                       # list all stored key names
 alice list -l                    # long: KEY / LENGTH / STRENGTH / KEK / DESC columns
+alice list 'kfk-*'               # filter names by a shell glob
 alice get stripe-key             # metadata only
+alice get stripe-key --json      # metadata as JSON (for scripts)
 alice get stripe-key --reveal    # shows the value (TTY required)
+alice desc stripe-key "prod pay" # set a description without re-entering the value
 alice audit                      # local hygiene scan: weak / stale-KEK / missing-metadata
 alice audit --strict             # same, but exit non-zero if anything is flagged (CI)
+alice audit --ignore '*user*'    # exclude matching keys (e.g. usernames) from findings
+alice rm 'test-*' old-key --yes  # remove by glob and/or multiple names at once
+alice completion zsh             # print a shell completion script (commands + key names)
 
 # `alice get <key>` (no --reveal) prints metadata, never the value:
 #   Key:      stripe-key
@@ -423,17 +429,21 @@ child process (`exec`), a file (`write`/`template`), or stays as metadata.
 | `alice read <file>` | Print the file with secrets redacted |
 | `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
-| `alice list [--json]` | List all stored key names |
+| `alice list [-l] [--json] [glob]` | List stored key names. `-l` adds length/strength/KEK-gen columns; a glob filters names. |
 | `alice status` | Enrollment + Bob reachability/unlock state |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets (redacted output — line numbers + key names, no values) |
-| `alice get <key>` | Secret **metadata** (no value). The value needs `--reveal` — TTY only, see below. |
+| `alice get <key> [--json]` | Secret **metadata** (no value); `--json` for scripts. The value needs `--reveal` — TTY only, see below. |
+| `alice desc <key> [text] [--clear]` | Show/set/clear a description (pure local metadata; no Bob, no decryption) |
+| `alice audit [--strict] [--ignore G,…]` | Local hygiene scan: weak / stale-KEK / missing-metadata. `--strict` exits non-zero on findings; `--ignore` excludes matching globs. |
+| `alice backfill-meta [--reason R]` | Populate length/strength/KEK-gen for pre-existing secrets — decrypts to **measure** only (never reveals); leaves set/updated times. |
+| `alice completion <zsh\|bash>` | Print a shell completion script (completes commands + existing key names) |
 | `alice exec [--env KEY=V]... [--reason R] [--show-match-string] -- <cmd> [args...]` | Match `~/.anb/alice/exec-allowlist.rules` (Go RE2); on hit, resolve placeholders and `syscall.Exec` the child. Default-deny; cmd must be an absolute path. `--show-match-string` prints the canonical match string. |
 | `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s placeholders into `<dst>` (atomic; explicit mode/owner; decrypts only referenced keys). See "Templating". |
 | `alice set <key> (--from-env V \| --stdin \| --generate) [--desc D] [--style S] [-l N] [--force]` | Store/rotate a secret (encrypted by Bob). **Non-TTY needs a value source**; `--force` to overwrite. Authorized by Bob's per-identity authz. |
 | `alice gen [--style S] [-l N] [-n N]` | Generate & print random password(s) — see below |
 | `alice import <file> --yes [--min-length N]` | Bulk-import a `.env` (`--yes` required when non-interactive) |
 | `alice init` | Initialize an empty local vault |
-| `alice rm <key> --yes` | Remove a secret (`--yes` when non-interactive). **Local delete, no server-side authz** — recover from an `anb-vault.sh` backup. |
+| `alice rm <key\|glob>... --yes` | Remove one or more secrets (globs + multiple names; `--yes` when non-interactive). **Local delete, no server-side authz** — recover from an `anb-vault.sh` backup. |
 
 ### alice — human-only (TTY required)
 

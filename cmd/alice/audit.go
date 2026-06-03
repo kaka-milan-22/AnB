@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
@@ -22,6 +24,7 @@ func cmdAudit(args []string) error {
 	fs := newFS("audit")
 	dir := dirFlag(fs)
 	strict := fs.Bool("strict", false, "exit non-zero if any issue is found")
+	ignore := fs.String("ignore", "", "comma-separated globs to exclude from findings (e.g. '*user*,*-login')")
 	parse(fs, args)
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -32,6 +35,34 @@ func cmdAudit(args []string) error {
 	if len(listing) == 0 {
 		fmt.Println("Vault is empty — nothing to audit.")
 		return nil
+	}
+
+	// --ignore drops matching keys from every finding (e.g. usernames, which
+	// are legitimately low-entropy and would otherwise show as "weak").
+	var patterns []string
+	for _, p := range strings.Split(*ignore, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			patterns = append(patterns, p)
+		}
+	}
+	ignored := 0
+	if len(patterns) > 0 {
+		kept := listing[:0]
+		for _, l := range listing {
+			skip := false
+			for _, pat := range patterns {
+				if ok, merr := filepath.Match(pat, l.Key); merr == nil && ok {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				ignored++
+				continue
+			}
+			kept = append(kept, l)
+		}
+		listing = kept
 	}
 
 	// Newest KEK generation seen locally; entries below it lag behind.
@@ -62,7 +93,7 @@ func cmdAudit(args []string) error {
 	} else {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		for _, l := range weak {
-			fmt.Fprintf(tw, "  %s\t~%d bit\t%d bytes\n", l.Key, l.EntropyBits, l.LenBytes)
+			fmt.Fprintf(tw, "  %s\t~%d bit\t%d bytes\n", red(l.Key), l.EntropyBits, l.LenBytes)
 		}
 		tw.Flush()
 	}
@@ -90,7 +121,11 @@ func cmdAudit(args []string) error {
 	}
 
 	issues := len(weak) + len(stale) + len(missing)
-	fmt.Printf("\nSummary: %d weak, %d stale, %d missing metadata.\n", len(weak), len(stale), len(missing))
+	fmt.Printf("\nSummary: %d weak, %d stale, %d missing metadata", len(weak), len(stale), len(missing))
+	if ignored > 0 {
+		fmt.Printf(" (%d ignored)", ignored)
+	}
+	fmt.Println(".")
 	if *strict && issues > 0 {
 		os.Exit(1)
 	}
