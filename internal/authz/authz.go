@@ -10,8 +10,10 @@
 //	}
 //
 // A rule value of "*" allows all keys; otherwise each entry is a key-name
-// prefix. If no policy file exists, OpenOrDefault returns an allow-all policy
-// (DefaultAllow=true) so first-run dev works — Bob logs a warning in that case.
+// prefix. If no policy file exists, OpenOrDefault returns DefaultAllow=true to
+// signal "unconfigured"; the serve path treats that as fail-closed (refuses to
+// start) unless the operator explicitly opts into allow-all via
+// --insecure-allow-all / ANB_BOB_ALLOW_ALL=1 (dev / single-user local).
 //
 // rate_limits caps per-identity decrypt operations per minute. The lookup is:
 // explicit per-identity entry > rate_limits["default"] > the built-in

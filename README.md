@@ -245,12 +245,14 @@ State lives in `~/.anb/bob/` (override with `--dir` or `$ANB_BOB_DIR`):
 `ca.crt ca.key server.crt server.key envelope.json authz.json` (plus
 `bob.log` / `bob.pid` when run with `-D`).
 
-**Configure authorization before serving in production.** `bob init` writes an
+**Configure authorization before serving.** `bob init` writes an
 `authz.json.example` next to the other state files; copy it to `authz.json` and
 edit the `rules` block so each Alice identity gets only the key prefixes it
-needs. Without `authz.json`, Bob runs ALLOW-ALL (every authenticated client
-sees every key) and logs a warning at startup. See [Authorization](#authorization-authzjson-in-bobs-dir)
-below for the schema.
+needs. **Without `authz.json`, `bob serve` refuses to start** (fail-closed) — so
+an unconfigured box can't silently grant every trusted-cert client every key.
+For local/dev where allow-all is intended, opt in explicitly with
+`bob serve --insecure-allow-all` (or `ANB_BOB_ALLOW_ALL=1`). See
+[Authorization](#authorization-authzjson-in-bobs-dir) below for the schema.
 
 Hand `ca.crt` to each Alice out of band (it's the public trust anchor).
 
@@ -1038,8 +1040,10 @@ Plus parse errors (lines that fail `aclrules.Parse`) always exit 1.
 ```
 
 `rules` maps an identity (client-cert CommonName) to allowed key prefixes
-(`"*"` = all). **If `authz.json` is absent, Bob runs allow-all** and logs a
-warning — fine for first-run, configure it before production.
+(`"*"` = all). **If `authz.json` is absent, `bob serve` refuses to start**
+(fail-closed) rather than silently granting everything. To run allow-all on
+purpose (local/dev), pass `bob serve --insecure-allow-all` or set
+`ANB_BOB_ALLOW_ALL=1`; Bob then logs a `WARN_ALLOW_ALL` event each start.
 
 ---
 

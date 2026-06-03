@@ -59,6 +59,15 @@ warn() { printf '\033[33m⚠ %s\033[0m\n' "$*" >&2; }
 info() { printf '%s\n' "$*" >&2; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$*" >&2; }
 
+# tar_safe <tarball> — succeed only if NO archive member is an absolute path
+# or contains a ".." component. Guards extraction against path traversal: a
+# crafted archive could otherwise write files outside the extraction dir.
+# Archives this script produces use relative "./" paths, so they always pass.
+tar_safe() {
+  unsafe=$(tar -tf "$1" 2>/dev/null | LC_ALL=C awk '/^\// || /(^|\/)\.\.(\/|$)/ { print }')
+  [ -z "$unsafe" ]
+}
+
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "$1 not on PATH${2:+ ($2)}"; }
 
 # UTC timestamp, deterministic format good for lexical sort.
@@ -258,6 +267,10 @@ unpack_verify() {
     msg=$(cat "$vstage/.age.err" 2>/dev/null)
     rm -rf "$vstage"
     die "decryption failed for $file — ${msg:-wrong passphrase, or missing -i identity for a recipient-encrypted archive, or the archive is corrupt/tampered}"
+  fi
+  if ! tar_safe "$tball"; then
+    rm -rf "$vstage"
+    die "refusing to extract $file: archive has absolute or '..' paths (possible path-traversal attack)"
   fi
   if ! tar -xpf "$tball" -C "$vstage"; then
     rm -rf "$vstage"

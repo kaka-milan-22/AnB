@@ -259,8 +259,8 @@ func cmdInit(args []string) error {
 		return err
 	}
 	fmt.Printf("✓ Master key wrapped (envelope.json) and server cert minted for %v\n", hostList)
-	fmt.Println("✓ Wrote authz.json.example — copy to authz.json and edit before serving in production")
-	fmt.Println("  (without authz.json, Bob runs ALLOW-ALL: every authenticated client can access every key)")
+	fmt.Println("✓ Wrote authz.json.example — copy to authz.json and edit before serving")
+	fmt.Println("  (without authz.json, `bob serve` refuses to start; pass --insecure-allow-all for local/dev)")
 	return nil
 }
 
@@ -385,6 +385,7 @@ func cmdServe(args []string) error {
 	ttl := fs.Int("ttl", 0, "idle seconds before auto-relock (0 = hold until exit)")
 	daemon := fs.Bool("D", false, "daemonize: read the password on the TTY, then detach into the background")
 	logPath := fs.String("log", "", "log file in daemon mode (default <dir>/bob.log)")
+	allowAll := fs.Bool("insecure-allow-all", false, "serve ALLOW-ALL when no authz.json exists (dev/local only; otherwise serve refuses)")
 	parse(fs, args)
 
 	// _ANB_DAEMON_CHILD marks the detached child re-exec'd by -D; it reads the
@@ -480,7 +481,15 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("authz.json: %w", err)
 	}
 	if policy.DefaultAllow {
-		audit("WARN_ALLOW_ALL", "msg", "no authz.json — running ALLOW-ALL (every authenticated client may access every key)")
+		// No authz.json. Fail closed by default — an unconfigured prod box
+		// must not silently grant every trusted-cert client every key. Allow
+		// it only when the operator explicitly opts in (dev / single-user local).
+		if !*allowAll && os.Getenv("ANB_BOB_ALLOW_ALL") != "1" {
+			return fmt.Errorf("no authz.json in %s — refusing to serve ALLOW-ALL.\n"+
+				"  Configure authorization: copy authz.json.example to authz.json and edit it,\n"+
+				"  or pass --insecure-allow-all (or set ANB_BOB_ALLOW_ALL=1) to run allow-all for local/dev.", d)
+		}
+		audit("WARN_ALLOW_ALL", "msg", "no authz.json — running ALLOW-ALL by explicit opt-in (--insecure-allow-all); every authenticated client may access every key")
 	}
 
 	store := keystore.New(func() { audit("AUTOLOCK", "msg", "master key auto-locked (idle TTL); restart serve to unlock") })

@@ -41,6 +41,15 @@ ok()   { printf '\033[32m✓ %s\033[0m\n' "$*" >&2; }
 info() { printf '%s\n' "$*" >&2; }
 now_ts() { date -u +%Y%m%dT%H%M%SZ; }
 
+# tar_safe <tarball> — succeed only if NO archive member is an absolute path
+# or contains a ".." component. Without this, a crafted archive could write
+# outside -C <dest> via "../" — defeating the "never touches $HOME" promise.
+# Archives this script produces use relative paths, so they always pass.
+tar_safe() {
+  unsafe=$(tar -tf "$1" 2>/dev/null | LC_ALL=C awk '/^\// || /(^|\/)\.\.(\/|$)/ { print }')
+  [ -z "$unsafe" ]
+}
+
 present_paths() {
   for p in $PATHS; do
     if [ -e "$HOME/$p" ]; then printf '%s\n' "$p"; fi
@@ -193,10 +202,23 @@ cmd_restore() {
   command -v age >/dev/null 2>&1 || die "age not on PATH"
   mkdir -p "$dest"
   set -- -d; [ -n "$identity" ] && set -- "$@" -i "$identity"
-  if age "$@" "$file" | tar -xpf - -C "$dest"; then
+  # Decrypt to a temp tarball first so we can validate member paths BEFORE
+  # extracting — a streamed `age | tar -x` would commit the write before we
+  # could reject a path-traversal archive.
+  tmptar="$dest/.archive.tar"
+  if ! age "$@" "$file" > "$tmptar" 2>/dev/null; then
+    rm -f "$tmptar"; die "decrypt failed (wrong -i identity or passphrase?)"
+  fi
+  if ! tar_safe "$tmptar"; then
+    rm -f "$tmptar"; die "refusing to extract $file: archive has absolute or '..' paths (possible path-traversal attack)"
+  fi
+  if tar -xpf "$tmptar" -C "$dest"; then
+    rm -f "$tmptar"
     ok "restored → $dest"
     info "review it, then copy what you want into place yourself (it did NOT touch \$HOME)"
-  else die "decrypt/extract failed (wrong -i identity or passphrase?)"; fi
+  else
+    rm -f "$tmptar"; die "extract failed (archive truncated?)"
+  fi
 }
 
 # ---- list ------------------------------------------------------------------
