@@ -5,9 +5,12 @@
 # tar model, no chezmoi, no lock-in (restore is plain `age -d | tar -x`).
 #
 #   dotfiles-backup.sh scan
-#   dotfiles-backup.sh backup  [-o DIR] [-r RECIP|-R FILE|-p] [-k N] [--upload REMOTE] [--force]
+#   dotfiles-backup.sh backup  [-o DIR] [-r RECIP|-R FILE|-p] [-k N] [--upload REMOTE | --no-upload] [--force]
 #   dotfiles-backup.sh restore <file.age> [-i IDENTITY] [-C DIR]
 #   dotfiles-backup.sh list    [-o DIR]
+#
+# Backups auto-mirror to UPLOAD_DEFAULT (an rclone remote) keeping the newest
+# -k N both locally and remotely; pass --no-upload for a local-only run.
 #
 # Encryption prefers an age recipient ($ANB_AGE_RECIPIENT / -r / -R); passphrase
 # (-p) is the TTY fallback; refuses to fall back silently in a non-TTY.
@@ -33,7 +36,10 @@ PATHS="
 TAR_EXCLUDES="--exclude=*.log --exclude=*.pyc --exclude=__pycache__ --exclude=*.tar.gz --exclude=.DS_Store --exclude=.git"
 
 OUTDIR_DEFAULT="$HOME/dotfiles-backups"
-KEEP_DEFAULT=10
+KEEP_DEFAULT=7
+# default rclone remote to mirror to (flat layout). Empty = no auto-upload.
+# Override per-run with --upload REMOTE, or skip with --no-upload.
+UPLOAD_DEFAULT="gdrive:dotfiles-backup"
 
 die()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 warn() { printf '\033[33m⚠ %s\033[0m\n' "$*" >&2; }
@@ -136,9 +142,25 @@ prune_old() {
   done
 }
 
+# mirror retention to the rclone remote: keep only the newest $keep backups.
+# Uses a flat layout (dotfiles-*.age in one dir) so names sort by timestamp,
+# exactly like prune_old does locally.
+prune_remote() {
+  remote="$1"; keep="$2"
+  [ "$keep" -gt 0 ] 2>/dev/null || return 0
+  files=$(rclone lsf "$remote/" 2>/dev/null | grep -E '^dotfiles-.*\.age$' | sort || true)
+  [ -n "$files" ] || return 0
+  total=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+  excess=$((total - keep))
+  [ "$excess" -gt 0 ] || return 0
+  printf '%s\n' "$files" | head -n "$excess" | while IFS= read -r f; do
+    rclone deletefile "$remote/$f" 2>/dev/null && info "  remote retention: removed $f"
+  done
+}
+
 # ---- backup ----------------------------------------------------------------
 cmd_backup() {
-  outdir=""; recipient=""; rfile=""; pass=0; upload=""; force=0; keep="$KEEP_DEFAULT"
+  outdir=""; recipient=""; rfile=""; pass=0; upload=""; noupload=0; force=0; keep="$KEEP_DEFAULT"
   while [ $# -gt 0 ]; do case "$1" in
     -o) outdir="$2"; shift 2;;
     -r) recipient="$2"; shift 2;;
@@ -146,9 +168,13 @@ cmd_backup() {
     -p) pass=1; shift;;
     -k) keep="$2"; shift 2;;
     --upload) upload="$2"; shift 2;;
+    --no-upload) noupload=1; shift;;
     --force) force=1; shift;;
     *) die "backup: unknown option '$1'";;
   esac; done
+  # resolve upload target: --no-upload wins; else explicit --upload; else default.
+  if [ "$noupload" = 1 ]; then upload=""
+  elif [ -z "$upload" ]; then upload="$UPLOAD_DEFAULT"; fi
   [ -n "$outdir" ] || outdir="$OUTDIR_DEFAULT"
   mkdir -p "$outdir"; chmod 700 "$outdir" 2>/dev/null || true
   command -v age >/dev/null 2>&1 || die "age not on PATH (brew install age)"
@@ -180,9 +206,13 @@ cmd_backup() {
 
   if [ -n "$upload" ]; then
     command -v rclone >/dev/null 2>&1 || die "rclone not on PATH"
-    dest="$upload/$(date -u +%Y-%m-%d)"
-    info "uploading to $dest/ ..."
-    rclone copy "$out" "$dest/" && ok "uploaded → $dest/$(basename "$out")"
+    info "uploading to $upload/ ..."
+    if rclone copy "$out" "$upload/"; then
+      ok "uploaded → $upload/$(basename "$out")"
+      prune_remote "$upload" "$keep"
+    else
+      warn "upload failed — local backup kept at $out"
+    fi
   fi
 }
 
@@ -249,13 +279,17 @@ case "$sub" in
 dotfiles-backup.sh — age-encrypted backup of dotfiles + claude skills
 
   scan                              list packable files + flag dangerous ones
-  backup [-o DIR] [-r REC|-R F|-p] [-k N] [--upload REMOTE] [--force]
+  backup [-o DIR] [-r REC|-R F|-p] [-k N] [--upload REMOTE | --no-upload] [--force]
   restore <file.age> [-i IDENTITY] [-C DIR]
   list [-o DIR]
 
+Backups auto-upload to UPLOAD_DEFAULT (currently: ${UPLOAD_DEFAULT:-<unset>}),
+keeping the newest -k N locally and on the remote. Use --no-upload to skip.
+
 Examples:
   dotfiles-backup.sh scan
-  ANB_AGE_RECIPIENT=age1... dotfiles-backup.sh backup --upload gdrive:dotfiles-backup
+  ANB_AGE_RECIPIENT=age1... dotfiles-backup.sh backup            # backs up + uploads
+  ANB_AGE_RECIPIENT=age1... dotfiles-backup.sh backup --no-upload
   ANB_AGE_IDENTITY=~/key.txt dotfiles-backup.sh restore ~/dotfiles-backups/dotfiles-....age
 EOF
     exit 2;;
