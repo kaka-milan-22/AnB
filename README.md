@@ -420,7 +420,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `bob rotate-master-password [--keep-key]` | New password + a fresh K version (lazy rewrap); `--keep-key` retains the v2.3 behavior (password only, no new K). See "Master key rotation" below. |
 | `bob rotate-master-key [--finalize <id>] [--yes]` | Add a fresh K under the same password; `--finalize <id>` retires an old K (after every alice has rekey'd off it). |
 | `bob list-keys` | Show K versions in `envelope.json` (no password needed). |
-| `bob migrate-aad [--dir D] [--vault-dir D]` | One-time: re-seal every vault entry AAD-bound to its key name (v3.4.0+ upgrade). Offline; idempotent; backs up the vault first. See "Upgrading to v3.4.0" below. |
+| `bob migrate-aad [--dir D] [--vault-dir D]` | One-time: re-seal every vault entry AAD-bound to its key name (v3.4.1+ upgrade). Offline; idempotent; backs up the vault first. See "Upgrading to v3.4.1" below. |
 
 ### alice — agent-safe (no TTY required)
 
@@ -592,9 +592,16 @@ encrypted blob — ciphertext at rest wherever you store it. Run
 
 ---
 
-## Upgrading to v3.4.0 (AAD ciphertext binding)
+## Upgrading to v3.4.1 (AAD ciphertext binding)
 
-v3.4.0 binds every secret's ciphertext to its key name via AES-GCM additional
+> **Use `@v3.4.1`, not `@v3.4.0`.** The `v3.4.0` tag was moved after first
+> publish, so the Go module cache/proxy may serve a stale build that lacks the
+> AAD code while still printing `v3.4.0` from `bob version`. Such a build has no
+> `migrate-aad` command and fails to decrypt a migrated vault. `v3.4.1` is the
+> same code at a clean tag. If you already pulled a bad `v3.4.0`, run
+> `go clean -modcache` (or build from source: `cd <repo> && go install ./cmd/...`).
+
+v3.4.1 binds every secret's ciphertext to its key name via AES-GCM additional
 authenticated data (AAD). Before, a ciphertext was a free-floating blob under
 the master key, so anyone with vault **write** access could swap one entry's
 ciphertext into another's slot (ciphertext substitution) without the key. Now
@@ -614,13 +621,16 @@ Order matters — the strict daemon can't read the old vault until you migrate:
 # 0. Back up the vault (migrate-aad also writes its own .pre-aad-* backup).
 cp ~/.anb/alice/vault.json ~/vault.json.bak.$(date +%s)
 
-# 1. Install v3.4.0 binaries (does NOT touch the vault or the running daemon).
+# 1. Install v3.4.1 binaries (does NOT touch the vault or the running daemon).
 #    AnB is a private repo, so mark it private once — otherwise `go install`
 #    fails the public checksum DB with "does NOT match the one reported by the
 #    checksum server".
 go env -w GOPRIVATE=github.com/kaka-milan-22/*
-go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.4.0 \
-           github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.4.0
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.4.1 \
+           github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.4.1
+
+# Confirm the binary actually has the AAD code (a stale build lacks this):
+bob 2>&1 | grep -q migrate-aad && echo "AAD build OK" || echo "STALE — go clean -modcache"
 
 # 2. Stop the old daemon, then migrate offline (prompts for the master password).
 kill "$(cat ~/.anb/bob/bob.pid)"

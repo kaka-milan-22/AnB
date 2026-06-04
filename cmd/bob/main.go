@@ -100,6 +100,7 @@ func usage() {
 	fmt.Fprintf(w, row, "rotate-master-password", "New password + new K (lazy rewrap). --keep-key keeps the old behavior (password only).")
 	fmt.Fprintf(w, row, "rotate-master-key", "Add a fresh K under the same password; --finalize <id> retires an old K.")
 	fmt.Fprintf(w, row, "list-keys", "Show K versions in envelope.json (no password needed).")
+	fmt.Fprintf(w, row, "migrate-aad", "One-shot: bind each vault entry's name as AAD (offline; backs up first).")
 
 	fmt.Fprint(w, "\nCommon: --dir DIR        state dir (default ~/.anb/bob or $ANB_BOB_DIR)\n")
 	fmt.Fprint(w, "        $ANB_BOB_PASSWORD master password for init/serve (else prompted on a TTY)\n")
