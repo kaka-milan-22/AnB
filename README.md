@@ -743,6 +743,13 @@ encrypted at rest. But two reasons to clean up:
 > `--finalize`, not `alice set`.** Re-`set` the new value too, but rotation is
 > what actually kills the old one. (`alice rm` has the same gap — a delete is
 > just a missing entry an old backup restores.)
+>
+> **One-shot:** `scripts/anb-revoke.sh` runs the whole order-sensitive dance —
+> backs up envelope + vault, rotates, restarts the daemon, `alice rekey`s,
+> **gates on rekey-status==0 (refuses to finalize if anything would brick)**,
+> finalizes every old K, restarts again, and verifies only the new K remains.
+> Run it in a terminal (it needs the master password once and a TTY for
+> `alice rekey`): `scripts/anb-revoke.sh [--addr H:P] [--bob-dir D] [--alice-dir D]`.
 
 Routine workflow:
 
