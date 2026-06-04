@@ -155,6 +155,17 @@ func Open(key []byte, packed string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Guard the nonce length BEFORE handing it to gcm.Open: Go's AEAD.Open
+	// PANICS (not errors) on a nonce whose length != NonceSize(). A corrupted
+	// or tampered ciphertext with a short/long IV would otherwise crash the
+	// daemon (a local DoS) instead of failing cleanly. Tag length is checked
+	// too for a clear error rather than a confusing auth failure.
+	if len(iv) != gcmNonceLen {
+		return nil, fmt.Errorf("crypto: bad nonce length %d (want %d)", len(iv), gcmNonceLen)
+	}
+	if len(tag) != gcmTagLen {
+		return nil, fmt.Errorf("crypto: bad tag length %d (want %d)", len(tag), gcmTagLen)
+	}
 	gcm, err := newGCM(key)
 	if err != nil {
 		return nil, err

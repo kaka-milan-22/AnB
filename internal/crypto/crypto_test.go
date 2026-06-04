@@ -35,6 +35,29 @@ func TestOpenWrongKeyFails(t *testing.T) {
 	}
 }
 
+// A ciphertext with a wrong-length nonce must error, NOT panic. Go's
+// gcm.Open panics on a nonce whose length != NonceSize(); a corrupted or
+// tampered vault entry would otherwise crash the daemon.
+func TestOpenBadNonceLengthErrorsNotPanic(t *testing.T) {
+	key, _ := NewMasterKey()
+	// 8-byte IV (should be 12) + arbitrary tag/ct hex.
+	bad := hex.EncodeToString([]byte("12345678")) + ":" +
+		hex.EncodeToString(make([]byte, gcmTagLen)) + ":" +
+		hex.EncodeToString([]byte("deadbeef"))
+	if _, err := Open(key, bad); err == nil {
+		t.Fatal("expected error for short nonce")
+	} else if !strings.Contains(err.Error(), "nonce length") {
+		t.Fatalf("want nonce-length error, got %v", err)
+	}
+	// Over-long nonce too.
+	bad2 := hex.EncodeToString(make([]byte, 16)) + ":" +
+		hex.EncodeToString(make([]byte, gcmTagLen)) + ":" +
+		hex.EncodeToString([]byte("x"))
+	if _, err := Open(key, bad2); err == nil {
+		t.Fatal("expected error for long nonce")
+	}
+}
+
 func TestWrapUnwrap(t *testing.T) {
 	mk, _ := NewMasterKey()
 	env, err := Wrap(mk, "correct horse battery staple")
