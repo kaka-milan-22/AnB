@@ -630,6 +630,14 @@ alice list                 # lists keys
 alice get <some-key>       # metadata; or `alice exec`/`alice shell` to decrypt
 ```
 
+> **For AI agents:** steps 2 and 3 (`bob migrate-aad`, `bob serve`) prompt for
+> the master password on a TTY — these are the **human operator's** steps. An
+> agent must hand them to the operator and run them itself, and must **not** set
+> `$ANB_BOB_PASSWORD` to work around the prompt (that would pull the master
+> password into the agent's environment/context). Run non-interactively, both
+> commands fail closed with `needs the master password: run on a TTY`. The agent
+> can do step 0 (backup), step 1 (`go install`), and step 4 (verify).
+
 `migrate-aad` is **idempotent** (re-running is a no-op once everything is
 bound) and **fail-safe**: on any per-entry error it aborts *without writing* —
 the original vault and the timestamped `.pre-aad-*` backup are intact.
