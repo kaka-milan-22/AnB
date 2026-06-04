@@ -718,6 +718,32 @@ encrypted at rest. But two reasons to clean up:
    being used as a decrypt oracle going forward, plus any future
    `envelope.json` leak no longer containing K_<id>.
 
+> ### Revoking a leaked secret: rotate, don't just `set`
+>
+> If a *secret's value* leaks (a token, a DB password), `alice set <key>`
+> **overwrites** the entry with a new value — but it does **not** revoke the
+> old one. The old ciphertext is still a valid blob under the same master key,
+> and `vault.json` has no version/freshness marker: anyone who can write that
+> file (any process running as you) can copy an **old vault.json back over the
+> current one** — from `.pre-aad-*`, a `vault.json.bak.*`, Time Machine, a git
+> checkout — and the leaked value is live again, AAD and all. AAD binds a
+> ciphertext to its *name*; it does not bind it to being the *latest* version.
+>
+> The only hard revocation today is at the **key** layer, not the file layer:
+>
+> ```sh
+> bob rotate-master-key                                 # new current K (same password)
+> alice rekey                                           # migrate every entry onto it (per identity)
+> bob rotate-master-key --finalize <old-id>             # retire the old K — old ciphertext now undecryptable
+> kill $(cat ~/.anb/bob/bob.pid) && bob serve -D --addr 127.0.0.1:8443   # wipe old K from memory
+> ```
+>
+> After `--finalize`, an old vault.json rolled back into place is just dead
+> bytes — Bob has no K to open it. So: **leaked value → `rotate-master-key` +
+> `--finalize`, not `alice set`.** Re-`set` the new value too, but rotation is
+> what actually kills the old one. (`alice rm` has the same gap — a delete is
+> just a missing entry an old backup restores.)
+
 Routine workflow:
 
 ```sh
