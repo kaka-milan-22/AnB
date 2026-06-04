@@ -615,6 +615,10 @@ Order matters — the strict daemon can't read the old vault until you migrate:
 cp ~/.anb/alice/vault.json ~/vault.json.bak.$(date +%s)
 
 # 1. Install v3.4.0 binaries (does NOT touch the vault or the running daemon).
+#    AnB is a private repo, so mark it private once — otherwise `go install`
+#    fails the public checksum DB with "does NOT match the one reported by the
+#    checksum server".
+go env -w GOPRIVATE=github.com/kaka-milan-22/*
 go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.4.0 \
            github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.4.0
 
