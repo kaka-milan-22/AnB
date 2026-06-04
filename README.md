@@ -420,6 +420,7 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 | `bob rotate-master-password [--keep-key]` | New password + a fresh K version (lazy rewrap); `--keep-key` retains the v2.3 behavior (password only, no new K). See "Master key rotation" below. |
 | `bob rotate-master-key [--finalize <id>] [--yes]` | Add a fresh K under the same password; `--finalize <id>` retires an old K (after every alice has rekey'd off it). |
 | `bob list-keys` | Show K versions in `envelope.json` (no password needed). |
+| `bob migrate-aad [--dir D] [--vault-dir D]` | One-time: re-seal every vault entry AAD-bound to its key name (v3.4.0+ upgrade). Offline; idempotent; backs up the vault first. See "Upgrading to v3.4.0" below. |
 
 ### alice — agent-safe (no TTY required)
 
@@ -588,6 +589,62 @@ and optional `rclone --upload`, `restore` decrypts to a fresh dir (never
 clobbers `$HOME`). Unlike a dotfiles *manager* (chezmoi et al.) it produces one
 encrypted blob — ciphertext at rest wherever you store it. Run
 `scripts/dotfiles-backup.sh -h`.
+
+---
+
+## Upgrading to v3.4.0 (AAD ciphertext binding)
+
+v3.4.0 binds every secret's ciphertext to its key name via AES-GCM additional
+authenticated data (AAD). Before, a ciphertext was a free-floating blob under
+the master key, so anyone with vault **write** access could swap one entry's
+ciphertext into another's slot (ciphertext substitution) without the key. Now
+the wrong slot fails authentication.
+
+This is a **strict, no-backward-compat** change: the runtime (`bob serve`) only
+reads AAD-bound ciphertext. A vault written by v3.3.x (no AAD) must be migrated
+**once per machine** before the new daemon can read it. The legacy no-AAD read
+path lives **only** in the offline `bob migrate-aad` command — it is never
+exposed over the mTLS oracle.
+
+### One-time migration (run on every machine that has a vault)
+
+Order matters — the strict daemon can't read the old vault until you migrate:
+
+```bash
+# 0. Back up the vault (migrate-aad also writes its own .pre-aad-* backup).
+cp ~/.anb/alice/vault.json ~/vault.json.bak.$(date +%s)
+
+# 1. Install v3.4.0 binaries (does NOT touch the vault or the running daemon).
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.4.0 \
+           github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.4.0
+
+# 2. Stop the old daemon, then migrate offline (prompts for the master password).
+kill "$(cat ~/.anb/bob/bob.pid)"
+bob migrate-aad            # defaults: bob ~/.anb/bob, vault ~/.anb/alice
+
+# 3. Start the new (strict) daemon — it now reads the AAD-bound vault.
+bob serve -D --addr 127.0.0.1:8443
+
+# 4. Verify.
+alice list                 # lists keys
+alice get <some-key>       # metadata; or `alice exec`/`alice shell` to decrypt
+```
+
+`migrate-aad` is **idempotent** (re-running is a no-op once everything is
+bound) and **fail-safe**: on any per-entry error it aborts *without writing* —
+the original vault and the timestamped `.pre-aad-*` backup are intact.
+
+**Roll back** by restoring the backup and reinstalling the previous tag:
+
+```bash
+cp ~/vault.json.bak.* ~/.anb/alice/vault.json   # or the .pre-aad-* file
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.3.12 \
+           github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.3.12
+```
+
+> Multi-machine note: each enrolled machine has its own `~/.anb/alice/vault.json`
+> and must be migrated on its own (the secrets/ciphertext are local; only the
+> master key lives with Bob). Migrate each box with the steps above.
 
 ---
 
