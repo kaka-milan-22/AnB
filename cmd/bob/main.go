@@ -64,6 +64,8 @@ func main() {
 		err = cmdRotateMasterKey(os.Args[2:])
 	case "list-keys":
 		err = cmdListKeys(os.Args[2:])
+	case "migrate-aad":
+		err = cmdMigrateAAD(os.Args[2:])
 	case "version", "--version", "-V":
 		version.Print(os.Stdout, "bob")
 		return

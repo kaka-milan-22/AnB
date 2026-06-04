@@ -141,3 +141,40 @@ func TestOpenAcceptsExternalFormat(t *testing.T) {
 		}
 	}
 }
+
+// SealAAD/OpenAAD round-trip with matching AAD.
+func TestSealOpenAADRoundTrip(t *testing.T) {
+	key, _ := NewMasterKey()
+	packed, err := SealAAD(key, []byte("secret"), []byte("my-name"))
+	if err != nil {
+		t.Fatalf("sealAAD: %v", err)
+	}
+	pt, err := OpenAAD(key, packed, []byte("my-name"))
+	if err != nil || string(pt) != "secret" {
+		t.Fatalf("openAAD with correct aad: pt=%q err=%v", pt, err)
+	}
+}
+
+// A ciphertext sealed for one name must not open under another — the binding
+// that prevents ciphertext substitution between vault entries.
+func TestOpenAADWrongAADFails(t *testing.T) {
+	key, _ := NewMasterKey()
+	packed, _ := SealAAD(key, []byte("secret"), []byte("name-A"))
+	if _, err := OpenAAD(key, packed, []byte("name-B")); err == nil {
+		t.Fatal("OpenAAD with wrong aad must fail (substitution prevention)")
+	}
+}
+
+// OpenAAD is STRICT: it does NOT fall back to nil-aad, so a legacy (no-AAD)
+// ciphertext must be migrated first. The legacy reader (Open) still reads it.
+func TestOpenAADStrictRejectsLegacyNilAAD(t *testing.T) {
+	key, _ := NewMasterKey()
+	legacy, _ := Seal(key, []byte("legacy")) // sealed with no aad
+	if _, err := OpenAAD(key, legacy, []byte("name")); err == nil {
+		t.Fatal("OpenAAD must reject a nil-aad ciphertext (no fallback) — migration required")
+	}
+	pt, err := Open(key, legacy) // legacy reader still works (used by migrate-aad)
+	if err != nil || string(pt) != "legacy" {
+		t.Fatalf("legacy Open should still work: pt=%q err=%v", pt, err)
+	}
+}

@@ -138,7 +138,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		if resp, ok := s.guard(identity, []string{req.Key}, "encrypt", req.Reason); !ok {
 			return resp
 		}
-		packed, err := s.store.Encrypt([]byte(req.Plaintext))
+		packed, err := s.store.Encrypt(req.Key, []byte(req.Plaintext))
 		if err != nil {
 			return cryptoErr(err)
 		}
@@ -151,7 +151,7 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		if resp, ok := s.guard(identity, []string{req.Key}, "decrypt", req.Reason); !ok {
 			return resp
 		}
-		pt, rewrapped, _, err := s.store.Decrypt(req.Packed)
+		pt, rewrapped, _, err := s.store.Decrypt(req.Key, req.Packed)
 		if err != nil {
 			return cryptoErr(err)
 		}
@@ -167,11 +167,16 @@ func (s *Server) dispatch(identity string, req proto.Request) proto.Response {
 		if resp, ok := s.guard(identity, req.Keys, "decryptMany", req.Reason); !ok {
 			return resp
 		}
+		// Keys and PackedMany are parallel arrays (keys[i] names packedMany[i]);
+		// the name is the AAD, so a mismatch would be an auth failure.
+		if len(req.Keys) != len(req.PackedMany) {
+			return proto.Response{OK: false, Code: proto.CodeBadRequest, Error: "decryptMany: keys/packedMany length mismatch"}
+		}
 		pts := make([]string, 0, len(req.PackedMany))
 		rewraps := make([]string, len(req.PackedMany))
 		rewrapCount := 0
 		for i, p := range req.PackedMany {
-			pt, rewrapped, _, err := s.store.Decrypt(p)
+			pt, rewrapped, _, err := s.store.Decrypt(req.Keys[i], p)
 			if err != nil {
 				return cryptoErr(err)
 			}

@@ -166,8 +166,10 @@ func (s *Store) TTLRemaining() time.Duration {
 }
 
 // Encrypt seals plaintext under the current K and returns a versioned
-// packed string ("v<current>:iv:tag:ct"). Refreshes the idle timer.
-func (s *Store) Encrypt(plaintext []byte) (string, error) {
+// packed string ("v<current>:iv:tag:ct"). Refreshes the idle timer. name is
+// the vault key name, bound into the ciphertext as AAD so an entry cannot be
+// swapped for another's ciphertext.
+func (s *Store) Encrypt(name string, plaintext []byte) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == 0 {
@@ -177,7 +179,7 @@ func (s *Store) Encrypt(plaintext []byte) (string, error) {
 	if k == nil {
 		return "", ErrLocked
 	}
-	raw, err := crypto.Seal(k, plaintext)
+	raw, err := crypto.SealAAD(k, plaintext, []byte(name))
 	if err != nil {
 		return "", err
 	}
@@ -193,8 +195,12 @@ func (s *Store) Encrypt(plaintext []byte) (string, error) {
 //
 // currentVer: true iff the ciphertext was already on the current K.
 //
+// name is the vault key name, used as AAD: a ciphertext sealed for a different
+// name (or with no AAD, i.e. pre-migration) fails authentication. Run
+// `bob migrate-aad` once to convert a legacy vault.
+//
 // A ciphertext without a "v<N>:" prefix is treated as legacy version 1.
-func (s *Store) Decrypt(packed string) (plaintext []byte, rewrapped string, currentVer bool, err error) {
+func (s *Store) Decrypt(name string, packed string) (plaintext []byte, rewrapped string, currentVer bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == 0 {
@@ -209,7 +215,7 @@ func (s *Store) Decrypt(packed string) (plaintext []byte, rewrapped string, curr
 	if !ok {
 		return nil, "", false, ErrUnknownVersion
 	}
-	pt, oerr := crypto.Open(k, raw)
+	pt, oerr := crypto.OpenAAD(k, raw, []byte(name))
 	if oerr != nil {
 		return nil, "", false, oerr
 	}
@@ -217,9 +223,10 @@ func (s *Store) Decrypt(packed string) (plaintext []byte, rewrapped string, curr
 		s.armLocked(false)
 		return pt, "", true, nil
 	}
-	// Rewrap under current K so the caller can migrate lazily.
+	// Rewrap under current K (with the same name-AAD) so the caller can migrate
+	// lazily across key-version bumps.
 	cur := s.keys[s.current]
-	sealed, serr := crypto.Seal(cur, pt)
+	sealed, serr := crypto.SealAAD(cur, pt, []byte(name))
 	if serr != nil {
 		// Plaintext is unsafe to return on the error path — a confused
 		// caller might log/return it instead of bailing cleanly. Wipe

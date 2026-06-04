@@ -121,8 +121,18 @@ func Unwrap(env *Envelope, password string) ([]byte, error) {
 	return key, nil
 }
 
-// Seal encrypts plaintext under key and returns "ivHex:tagHex:ctHex".
-func Seal(key, plaintext []byte) (string, error) {
+// Seal encrypts plaintext under key with NO additional authenticated data and
+// returns "ivHex:tagHex:ctHex". Used for the master-key envelope, and as the
+// legacy reader's counterpart during AAD migration.
+func Seal(key, plaintext []byte) (string, error) { return sealAAD(key, plaintext, nil) }
+
+// SealAAD is Seal with additional authenticated data bound into the GCM tag.
+// The identical aad MUST be supplied to OpenAAD or authentication fails. Used
+// to bind a secret's ciphertext to its key name so vault entries cannot be
+// silently swapped (ciphertext-substitution).
+func SealAAD(key, plaintext, aad []byte) (string, error) { return sealAAD(key, plaintext, aad) }
+
+func sealAAD(key, plaintext, aad []byte) (string, error) {
 	gcm, err := newGCM(key)
 	if err != nil {
 		return "", err
@@ -131,14 +141,24 @@ func Seal(key, plaintext []byte) (string, error) {
 	if _, err := rand.Read(iv); err != nil {
 		return "", err
 	}
-	sealed := gcm.Seal(nil, iv, plaintext, nil) // ct || tag
+	sealed := gcm.Seal(nil, iv, plaintext, aad) // ct || tag
 	ct := sealed[:len(sealed)-gcmTagLen]
 	tag := sealed[len(sealed)-gcmTagLen:]
 	return hex.EncodeToString(iv) + ":" + hex.EncodeToString(tag) + ":" + hex.EncodeToString(ct), nil
 }
 
-// Open reverses Seal. Returns an error on malformed input or auth failure.
-func Open(key []byte, packed string) ([]byte, error) {
+// Open reverses Seal (no AAD). Used for the master-key envelope and by the
+// AAD migration's legacy reader. Returns an error on malformed input or auth
+// failure.
+func Open(key []byte, packed string) ([]byte, error) { return openAAD(key, packed, nil) }
+
+// OpenAAD reverses SealAAD. It is STRICT — the supplied aad must match exactly,
+// with NO fallback to nil-aad. A vault written before AAD-binding must be
+// migrated (re-sealed with aad via `bob migrate-aad`) before OpenAAD can read
+// it; this is deliberate (security over backward-compat).
+func OpenAAD(key []byte, packed string, aad []byte) ([]byte, error) { return openAAD(key, packed, aad) }
+
+func openAAD(key []byte, packed string, aad []byte) ([]byte, error) {
 	ivHex, tagHex, ctHex, err := splitPacked(packed)
 	if err != nil {
 		return nil, err
@@ -170,7 +190,7 @@ func Open(key []byte, packed string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return gcm.Open(nil, iv, append(ct, tag...), nil)
+	return gcm.Open(nil, iv, append(ct, tag...), aad)
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {

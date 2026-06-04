@@ -354,7 +354,7 @@ func TestDecryptReturnsRewrapForLegacyV1(t *testing.T) {
 	store.HoldMulti(map[int][]byte{1: k1, 2: k2}, 2, 0)
 	h := newHarness(t, store, allowAll())
 
-	rawV1, err := crypto.Seal(k1, []byte("legacy-secret"))
+	rawV1, err := crypto.SealAAD(k1, []byte("legacy-secret"), []byte("k"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,9 +383,10 @@ func TestDecryptManyMixesRewrapsByPosition(t *testing.T) {
 	h := newHarness(t, store, allowAll())
 	c := h.dial(t, "alice")
 
-	// Build one legacy v1 and one current v2 ciphertext.
-	rawV1, _ := crypto.Seal(k1, []byte("old"))
-	rawV2Body, _ := crypto.Seal(k2, []byte("new"))
+	// Build one v1 (name "a") and one current v2 (name "b") ciphertext, each
+	// AAD-bound to the name the request will use.
+	rawV1, _ := crypto.SealAAD(k1, []byte("old"), []byte("a"))
+	rawV2Body, _ := crypto.SealAAD(k2, []byte("new"), []byte("b"))
 	v2Packed := crypto.PackVersion(2, rawV2Body)
 
 	resp := c.call(t, proto.Request{
