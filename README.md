@@ -718,38 +718,57 @@ encrypted at rest. But two reasons to clean up:
    being used as a decrypt oracle going forward, plus any future
    `envelope.json` leak no longer containing K_<id>.
 
-> ### Revoking a leaked secret: rotate, don't just `set`
+> ### When a secret leaks: revoke at the source first; rotate the key only if needed
 >
-> If a *secret's value* leaks (a token, a DB password), `alice set <key>`
-> **overwrites** the entry with a new value — but it does **not** revoke the
-> old one. The old ciphertext is still a valid blob under the same master key,
-> and `vault.json` has no version/freshness marker: anyone who can write that
-> file (any process running as you) can copy an **old vault.json back over the
-> current one** — from `.pre-aad-*`, a `vault.json.bak.*`, Time Machine, a git
-> checkout — and the leaked value is live again, AAD and all. AAD binds a
-> ciphertext to its *name*; it does not bind it to being the *latest* version.
+> **Step 1 — always, and it has nothing to do with AnB:** invalidate the
+> credential where it lives (regenerate the Telegram token in BotFather, rotate
+> the DB password, revoke the API key in the provider's console). A leaked
+> *value* is already out; no vault operation un-leaks it. Then `alice set <key>`
+> the new value and restart whatever injects it at launch. **For an ordinary
+> leak, you're done here — don't rotate the master key.**
 >
-> The only hard revocation today is at the **key** layer, not the file layer:
+> **Step 2 — only sometimes:** rotate + finalize the master key. This is the
+> only *hard* revocation AnB has, but it defends a specific thing — **the old
+> ciphertext**, not the leaked plaintext. `alice set` overwrites the entry but
+> doesn't revoke the old blob: it's still valid under the same master key, and
+> `vault.json` has no freshness marker, so anyone who can write that file (any
+> process running as you) can roll an **old vault.json** back into place — from
+> `.pre-aad-*`, a `*.bak.*`, Time Machine, git — and the old value is live
+> again. (AAD binds a ciphertext to its *name*, not to being the *latest*.)
+> Destroying the old key is what makes a rolled-back vault undecryptable.
+>
+> **Do Step 2 when:**
+> - the **master key or `envelope.json`** may have been exposed (a process had
+>   Bob's memory/filesystem; you ran Bob on a machine you no longer trust);
+> - you need the revocation to **survive a vault rollback** (your threat model
+>   includes an attacker who can write old files into `~/.anb`);
+> - **the local machine was compromised** — then also re-issue every upstream
+>   credential (Step 1 for all of them);
+> - **routine key hygiene** (e.g. quarterly), which also refreshes KDF cost.
+>
+> For a value that merely leaked, with normal trust, Step 2 is overkill — skip
+> it. Rotation re-keys the **whole vault** (AnB has one master key), so it's a
+> deliberate, vault-wide operation, not a per-secret one.
+>
+> The mechanism (order-sensitive — the restarts are not optional):
 >
 > ```sh
 > bob rotate-master-key                                 # new current K (same password)
+> kill $(cat ~/.anb/bob/bob.pid) && bob serve -D --addr 127.0.0.1:8443   # restart so Bob HOLDS the new K
 > alice rekey                                           # migrate every entry onto it (per identity)
-> bob rotate-master-key --finalize <old-id>             # retire the old K — old ciphertext now undecryptable
-> kill $(cat ~/.anb/bob/bob.pid) && bob serve -D --addr 127.0.0.1:8443   # wipe old K from memory
+> alice rekey-status                                    # GATE: must show 0 on the old K before finalizing
+> bob rotate-master-key --finalize <old-id>             # destroy the old K — old/rolled-back ciphertext now dead
+> kill $(cat ~/.anb/bob/bob.pid) && bob serve -D --addr 127.0.0.1:8443   # restart so the old K leaves memory
 > ```
 >
-> After `--finalize`, an old vault.json rolled back into place is just dead
-> bytes — Bob has no K to open it. So: **leaked value → `rotate-master-key` +
-> `--finalize`, not `alice set`.** Re-`set` the new value too, but rotation is
-> what actually kills the old one. (`alice rm` has the same gap — a delete is
-> just a missing entry an old backup restores.)
->
-> **One-shot:** `scripts/anb-revoke.sh` runs the whole order-sensitive dance —
-> backs up envelope + vault, rotates, restarts the daemon, `alice rekey`s,
-> **gates on rekey-status==0 (refuses to finalize if anything would brick)**,
-> finalizes every old K, restarts again, and verifies only the new K remains.
-> Run it in a terminal (it needs the master password once and a TTY for
-> `alice rekey`): `scripts/anb-revoke.sh [--addr H:P] [--bob-dir D] [--alice-dir D]`.
+> **One-shot:** `scripts/anb-revoke.sh` runs exactly this, safely — backs up
+> envelope + vault, rotates, restarts, `alice rekey`s, **gates on
+> rekey-status==0 (refuses to finalize if anything would brick)**, finalizes
+> every old K, restarts again, verifies only the new K remains. Run it in a
+> terminal (master password once; `alice rekey` needs a TTY):
+> `scripts/anb-revoke.sh [--addr H:P] [--bob-dir D] [--alice-dir D]`.
+> (`alice rm` has the same rollback gap as `set` — a delete is just a missing
+> entry an old backup restores; only key destruction is permanent.)
 
 Routine workflow:
 
