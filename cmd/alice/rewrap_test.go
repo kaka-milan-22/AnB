@@ -8,7 +8,7 @@ import (
 
 // applyRewraps must refresh KeyEpoch from the new packed prefix while leaving
 // the value-derived metadata (UpdatedAt, LenBytes, EntropyBits, CreatedAt)
-// untouched — a rewrap moves the wrapping KEK forward but the plaintext is
+// untouched — a rewrap moves the master-key version forward but the plaintext is
 // unchanged.
 func TestApplyRewrapsBumpsKeyEpochOnly(t *testing.T) {
 	dir := t.TempDir()

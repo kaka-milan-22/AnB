@@ -36,7 +36,7 @@ scoped down to a single self-hosted binary you fully control.
             mTLS (private CA, mutual cert verification, any network)
  ┌──────────────────┐   Alice sends ciphertext ─────►  ┌───────────────────────────┐
  │ alice (client)   │                                  │ bob (KMS daemon)          │
- │ • vault.json     │   ◄──── Bob returns plaintext     │ • master key (KEK)         │
+ │ • vault.json     │   ◄──── Bob returns plaintext     │ • master key K             │
  │   (AES-GCM)      │                                  │   mlock'd, idle TTL        │
  │ • redaction      │   Alice sends plaintext ──────►   │ • operator unlocks once    │
  │ • client cert/key│                                  │   with a master password   │
@@ -98,7 +98,7 @@ protect the endpoints:
 - **Alice's client private key is the new secret-zero.** Anyone who steals it can
   impersonate Alice to Bob. Keep it `0600`; revoke it (rotate the CA / reissue) if
   lost.
-- **Bob is a centralized, high-value single point** — it holds the KEK and sees
+- **Bob is a centralized, high-value single point** — it holds the master key and sees
   all plaintext that flows through it. Harden and audit it accordingly.
 - **Enrollment pairing is a human OOB check, not a hard gate.** The 8-digit code
   defends against in-flight cert swaps and operator misclicks; it does *not*
@@ -324,30 +324,31 @@ alice set db-url --from-env DATABASE_URL
 
 # list / inspect
 alice list                       # list all stored key names
-alice list -l                    # long: KEY / LENGTH / STRENGTH / KEK / DESC columns
+alice list -l                    # long: KEY / LENGTH / STRENGTH / MK(master-key ver) / DESC columns
 alice list 'kfk-*'               # filter names by a shell glob
 alice get stripe-key             # metadata only
 alice get stripe-key --json      # metadata as JSON (for scripts)
 alice get stripe-key --reveal    # shows the value (TTY required)
 alice desc stripe-key "prod pay" # set a description without re-entering the value
-alice audit                      # local hygiene scan: weak / stale-KEK / missing-metadata
+alice audit                      # local hygiene scan: weak / stale-master-key / missing-metadata
 alice audit --strict             # same, but exit non-zero if anything is flagged (CI)
 alice audit --ignore '*user*'    # exclude matching keys (e.g. usernames) from findings
 alice rm 'test-*' old-key --yes  # remove by glob and/or multiple names at once
 alice completion zsh             # print a shell completion script (commands + key names)
 
 # `alice get <key>` (no --reveal) prints metadata, never the value:
-#   Key:      stripe-key
-#   Desc:     prod payments
-#   Set at:   2026-06-02T13:25:19Z   # first stored
-#   Updated:  2026-06-02T18:40:02Z   # last value change (omitted if same as Set at)
-#   KEK gen:  2                      # KEK generation wrapping this entry
-#   Length:   20 bytes               # exact plaintext length
-#   Strength: ~128 bit (excellent)   # charset-estimated, 8-bit-quantized
-# Length is exact — the GCM ciphertext already implies it, so there's nothing
-# to hide. Strength is kept coarse (charset composition is NOT recoverable from
-# the ciphertext). `alice list --json` also reports each entry's keyEpoch, so
-# you can spot entries lagging the current KEK.
+#   Key:        stripe-key
+#   Desc:       prod payments
+#   Set at:     2026-06-02T13:25:19Z   # first stored
+#   Updated:    2026-06-02T18:40:02Z   # last value change (omitted if same as Set at)
+#   Master key: v2                     # the master-key version that sealed this value
+#   Length:     20 bytes               # exact plaintext length
+#   Strength:   ~128 bit (excellent)   # charset-estimated, 8-bit-quantized
+# "Master key" is the version of the data-encrypting master key K (the v<N>
+# ciphertext prefix) — NOT the password-derived envelope KEK. Length is exact —
+# the GCM ciphertext already implies it. Strength is kept coarse (charset
+# composition is NOT recoverable from the ciphertext). `alice list --json` also
+# reports each entry's keyEpoch, so you can spot entries lagging the current master key.
 #
 # Secrets stored before these fields existed show only Key/Set at. To populate
 # them in one pass (Bob decrypts each entry to MEASURE it; values are never
@@ -432,13 +433,13 @@ child process (`exec`), a file (`write`/`template`), or stays as metadata.
 | `alice read <file>` | Print the file with secrets redacted |
 | `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
-| `alice list [-l] [--json] [glob]` | List stored key names. `-l` adds length/strength/KEK-gen columns; a glob filters names. |
+| `alice list [-l] [--json] [glob]` | List stored key names. `-l` adds length/strength/master-key-version columns; a glob filters names. |
 | `alice status` | Enrollment + Bob reachability/unlock state |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets (redacted output — line numbers + key names, no values) |
 | `alice get <key> [--json]` | Secret **metadata** (no value); `--json` for scripts. The value needs `--reveal` — TTY only, see below. |
 | `alice desc <key> [text] [--clear]` | Show/set/clear a description (pure local metadata; no Bob, no decryption) |
-| `alice audit [--strict] [--ignore G,…]` | Local hygiene scan: weak / stale-KEK / missing-metadata. `--strict` exits non-zero on findings; `--ignore` excludes matching globs. |
-| `alice backfill-meta [--reason R]` | Populate length/strength/KEK-gen for pre-existing secrets — decrypts to **measure** only (never reveals); leaves set/updated times. |
+| `alice audit [--strict] [--ignore G,…]` | Local hygiene scan: weak / stale-master-key / missing-metadata. `--strict` exits non-zero on findings; `--ignore` excludes matching globs. |
+| `alice backfill-meta [--reason R]` | Populate length/strength/master-key-version for pre-existing secrets — decrypts to **measure** only (never reveals); leaves set/updated times. |
 | `alice completion <zsh\|bash>` | Print a shell completion script (completes commands + existing key names) |
 | `alice exec [--env KEY=V]... [--reason R] [--show-match-string] -- <cmd> [args...]` | Match `~/.anb/alice/exec-allowlist.rules` (Go RE2); on hit, resolve placeholders and `syscall.Exec` the child. Default-deny; cmd must be an absolute path. `--show-match-string` prints the canonical match string. |
 | `alice template <src> <dst> [--mode 0600] [--owner u:g] [--reason R]` | Render `<src>`'s placeholders into `<dst>` (atomic; explicit mode/owner; decrypts only referenced keys). See "Templating". |
@@ -1209,7 +1210,7 @@ locked refusal) against a real Bob over mTLS.
 
 v2 is functional. Not yet implemented (planned):
 
-- Bob KEK sealed to a TPM / cloud KMS for unattended restart (v2 still
+- Bob master key sealed to a TPM / cloud KMS for unattended restart (v2 still
   unlocks with an operator master password).
 - Alice's client key on hardware (PKCS#11 / Secure Enclave).
 - Certificate revocation lists / short-lived client certs.

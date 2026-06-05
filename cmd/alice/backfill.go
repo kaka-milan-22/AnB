@@ -16,8 +16,8 @@ import (
 //
 // CreatedAt and UpdatedAt are left untouched — the value isn't changing, we're
 // only describing what's already there. Any lazy rewrap Bob returns (because an
-// entry lagged the current KEK) is applied while we're here, so this doubles as
-// a KEK migration. Idempotent: re-running only rewrites entries whose computed
+// entry lagged the current master key) is applied while we're here, so this
+// doubles as a master-key migration. Idempotent: re-running only rewrites entries whose computed
 // metadata differs from what's stored.
 //
 // Bob must be reachable + unlocked, and the identity must have decrypt authz on
@@ -68,7 +68,7 @@ func cmdBackfillMeta(args []string) error {
 		if len(rewraps) == len(keys) {
 			rewrap = rewraps[i]
 		}
-		// Apply any lazy rewrap (KEK moved forward) before reading the epoch.
+		// Apply any lazy rewrap (master key moved forward) before reading the version.
 		effective := e.Value
 		if rewrap != "" {
 			e.Value = rewrap

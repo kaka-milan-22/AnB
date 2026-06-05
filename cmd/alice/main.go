@@ -114,7 +114,7 @@ func usage() {
 	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
 	fmt.Fprintf(w, row, "write [options] <file>", "Write a file, restoring <agent-vault:key> placeholders (safe for agents)")
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
-	fmt.Fprintf(w, row, "list [-l] [--json] [glob]", "List secret key names; -l adds length/strength/KEK columns; glob filters (safe)")
+	fmt.Fprintf(w, row, "list [-l] [--json] [glob]", "List secret key names; -l adds length/strength/master-key columns; glob filters (safe)")
 	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
 	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
 	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret (safe; non-TTY needs --from-env/--stdin/--generate)")
@@ -130,7 +130,7 @@ func usage() {
 	fmt.Fprintf(w, row, "rekey-status", "Show per-K-version entry counts in vault.json (local)")
 	fmt.Fprintf(w, row, "rekey [--reason R]", "Force-migrate every vault entry to Bob's current K version")
 	fmt.Fprintf(w, row, "backfill-meta [--reason R]", "Populate lenBytes/entropyBits/keyEpoch for pre-existing secrets (measures only, never reveals)")
-	fmt.Fprintf(w, row, "audit [--strict] [--ignore G]", "Local hygiene scan: flag weak / stale-KEK / metadata-missing secrets")
+	fmt.Fprintf(w, row, "audit [--strict] [--ignore G]", "Local hygiene scan: flag weak / stale-master-key / metadata-missing secrets")
 	fmt.Fprintf(w, row, "completion <zsh|bash>", "Print a shell completion script (completes commands + key names)")
 	fmt.Fprintf(w, row, "enroll [options]", "Generate a keypair + CSR, install the CA, save the profile (setup)")
 	fmt.Fprintf(w, row, "install-cert <client.crt>", "Install the signed client certificate (setup)")
@@ -270,7 +270,7 @@ func applyRewraps(s *localvault.Store, keys, rewrapped []string) (int, error) {
 			continue
 		}
 		e.Value = rewrapped[i]
-		// The plaintext is unchanged — only the wrapping KEK moved forward, so
+		// The plaintext is unchanged — only the master-key version moved forward, so
 		// refresh KeyEpoch but leave UpdatedAt/LenBytes/EntropyBits as-is.
 		if epoch, _, perr := crypto.ParseVersion(rewrapped[i]); perr == nil {
 			e.KeyEpoch = epoch

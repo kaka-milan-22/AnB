@@ -14,7 +14,7 @@ import (
 // audit — local hygiene scan over stored metadata. No decryption, no Bob: it
 // reads only what's already in vault.json. Flags three things:
 //   - weak secrets (entropy in the "weak" tier, ~<28 bit)
-//   - entries lagging the newest KEK generation seen locally
+//   - entries lagging the newest master-key version seen locally
 //   - entries with no strength metadata yet (need `alice backfill-meta`)
 //
 // Staleness is inferred from the highest keyEpoch present; for the
@@ -65,7 +65,7 @@ func cmdAudit(args []string) error {
 		listing = kept
 	}
 
-	// Newest KEK generation seen locally; entries below it lag behind.
+	// Newest master-key version seen locally; entries below it lag behind.
 	maxEpoch := 0
 	for _, l := range listing {
 		if l.KeyEpoch > maxEpoch {
@@ -98,13 +98,13 @@ func cmdAudit(args []string) error {
 		tw.Flush()
 	}
 
-	fmt.Printf("\nStale KEK (below the newest generation seen, v%d):\n", maxEpoch)
+	fmt.Printf("\nStale master key (below the newest version seen, v%d):\n", maxEpoch)
 	if len(stale) == 0 {
 		fmt.Println("  none")
 	} else {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		for _, l := range stale {
-			fmt.Fprintf(tw, "  %s\tKEK v%d\n", l.Key, l.KeyEpoch)
+			fmt.Fprintf(tw, "  %s\tv%d\n", l.Key, l.KeyEpoch)
 		}
 		tw.Flush()
 		fmt.Println("  → run `alice rekey` to migrate them to the current K.")

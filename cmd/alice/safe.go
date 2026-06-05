@@ -192,13 +192,13 @@ func cmdHas(args []string) error {
 }
 
 // list — list key names (local metadata). -l/--long adds the stored
-// per-entry metadata columns (length, strength, KEK gen) without decrypting.
+// per-entry metadata columns (length, strength, master-key version) without decrypting.
 func cmdList(args []string) error {
 	fs := newFS("list")
 	dir := dirFlag(fs)
 	asJSON := fs.Bool("json", false, "output as JSON")
 	var long bool
-	fs.BoolVar(&long, "l", false, "long format: show length, strength, and KEK gen columns")
+	fs.BoolVar(&long, "l", false, "long format: show length, strength, and master-key version columns")
 	fs.BoolVar(&long, "long", false, "alias for -l")
 	pos := parse(fs, args)
 	s := localvault.Open(*dir)
@@ -231,9 +231,9 @@ func cmdList(args []string) error {
 	// Long format. Metadata shows "—" for entries predating it (run
 	// `alice backfill-meta` to populate them).
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "KEY\tLENGTH\tSTRENGTH\tKEK\tDESC")
+	fmt.Fprintln(tw, "KEY\tLENGTH\tSTRENGTH\tMK\tDESC")
 	for _, l := range listing {
-		length, strg, kek := "—", "—", "—"
+		length, strg, mkver := "—", "—", "—"
 		if l.LenBytes != 0 {
 			length = fmt.Sprintf("%d", l.LenBytes)
 		}
@@ -241,9 +241,9 @@ func cmdList(args []string) error {
 			strg = fmt.Sprintf("~%d (%s)", l.EntropyBits, strength.Tier(l.EntropyBits))
 		}
 		if l.KeyEpoch != 0 {
-			kek = fmt.Sprintf("v%d", l.KeyEpoch)
+			mkver = fmt.Sprintf("v%d", l.KeyEpoch) // master-key version (v<N> prefix), not the envelope KEK
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", l.Key, length, strg, kek, l.Desc)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", l.Key, length, strg, mkver, l.Desc)
 	}
 	return tw.Flush()
 }

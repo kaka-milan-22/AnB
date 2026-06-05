@@ -23,10 +23,12 @@ type SecretEntry struct {
 	CreatedAt string `json:"createdAt"`
 	// UpdatedAt is the last time the VALUE changed (RFC3339 UTC). Empty means
 	// the value hasn't changed since CreatedAt. Rewraps do NOT bump it — the
-	// plaintext is unchanged, only the wrapping KEK.
+	// plaintext is unchanged, only the master-key version.
 	UpdatedAt string `json:"updatedAt,omitempty"`
-	// KeyEpoch is the KEK generation that wrapped Value, parsed from its
-	// "v<N>:" prefix. Lets `list` surface entries lagging the current KEK.
+	// KeyEpoch is the MASTER-KEY version that sealed Value, parsed from its
+	// "v<N>:" prefix — NOT the password-derived envelope KEK. Lets `list`
+	// surface entries lagging the current master key. (Field name kept as
+	// keyEpoch for on-disk compatibility; surfaced to users as "Master key".)
 	KeyEpoch int `json:"keyEpoch,omitempty"`
 	// LenBytes is the exact plaintext byte length. Not a side-channel: the
 	// AES-GCM ciphertext in Value already reveals it (GCM adds no padding, so

@@ -151,8 +151,9 @@ func cmdSet(args []string) error {
 	if err != nil {
 		return err
 	}
-	// KeyEpoch is the KEK generation Bob wrapped under, carried in the packed
-	// "v<N>:" prefix (legacy/no-prefix ⇒ epoch 1).
+	// KeyEpoch is the MASTER-KEY version that sealed this value, carried in the
+	// packed "v<N>:" prefix (legacy/no-prefix ⇒ version 1). It is NOT the
+	// password-derived envelope KEK — that wraps the master key, not the value.
 	epoch, _, _ := crypto.ParseVersion(packed)
 	now := nowStamp()
 	// Preserve the original CreatedAt on overwrite; UpdatedAt always records
@@ -275,22 +276,24 @@ func cmdGet(args []string) error {
 		fmt.Println(pt)
 		return nil
 	}
-	fmt.Printf("Key:      %s\n", key)
+	fmt.Printf("Key:        %s\n", key)
 	if e.Desc != "" {
-		fmt.Printf("Desc:     %s\n", e.Desc)
+		fmt.Printf("Desc:       %s\n", e.Desc)
 	}
-	fmt.Printf("Set at:   %s\n", e.CreatedAt)
+	fmt.Printf("Set at:     %s\n", e.CreatedAt)
 	if e.UpdatedAt != "" && e.UpdatedAt != e.CreatedAt {
-		fmt.Printf("Updated:  %s\n", e.UpdatedAt)
+		fmt.Printf("Updated:    %s\n", e.UpdatedAt)
 	}
 	if e.KeyEpoch != 0 {
-		fmt.Printf("KEK gen:  %d\n", e.KeyEpoch)
+		// The version of the MASTER KEY that sealed this value (the v<N>
+		// ciphertext prefix) — NOT the password-derived envelope KEK.
+		fmt.Printf("Master key: v%d\n", e.KeyEpoch)
 	}
 	if e.LenBytes != 0 {
-		fmt.Printf("Length:   %d bytes\n", e.LenBytes)
+		fmt.Printf("Length:     %d bytes\n", e.LenBytes)
 	}
 	if e.EntropyBits != 0 {
-		fmt.Printf("Strength: ~%d bit (%s)%s\n", e.EntropyBits, strength.Tier(e.EntropyBits), weakSuffix(e.EntropyBits))
+		fmt.Printf("Strength:   ~%d bit (%s)%s\n", e.EntropyBits, strength.Tier(e.EntropyBits), weakSuffix(e.EntropyBits))
 	}
 	return nil
 }
