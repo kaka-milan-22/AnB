@@ -1220,4 +1220,4 @@ v2 is functional. Not yet implemented (planned):
 
 ## License
 
-See [LICENSE](LICENSE) (to be added).
+MIT — see [LICENSE](LICENSE).
