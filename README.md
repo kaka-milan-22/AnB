@@ -1,14 +1,36 @@
-# Alice and Bob
+# Alice and Bob (AnB)
 
-A client/server secrets vault for the age of AI agents. **Alice** (the client CLI
-your agents call) keeps only ciphertext on disk and runs a redaction engine;
-**Bob** (the daemon / KMS server) holds the master key and acts as an
-encrypt/decrypt **oracle** over mutual TLS. The master key never lives on the
-client and never touches disk in plaintext — it stays inside Bob.
+**A secrets vault your AI agent can _use_ but never _read_.**
 
-It is the spiritual successor to [agent-vault](https://www.npmjs.com/package/@kaka-milan-22/agent-vault)
-(TypeScript): the same command surface and redaction model, but key custody is
-split out into a separate, authenticated service.
+`alice` (the CLI your agents, scripts, and cron jobs call) keeps only
+AES-256-GCM ciphertext on disk and runs a redaction engine. The master key lives
+in a separate mTLS daemon, **`bob`**, which acts as an encrypt/decrypt oracle —
+so a stolen laptop, a leaked repo, or a hijacked agent never yields a plaintext
+secret. It's the envelope-encryption / KMS pattern (AWS KMS, Vault transit)
+shrunk to a single self-hosted Go binary you fully control.
+
+```sh
+# An agent USES a secret without ever seeing it:
+alice exec --env GH_TOKEN='<agent-vault:gh-pat>' -- /opt/homebrew/bin/gh api user
+#   → the real token is injected into gh's environment at the last moment, never printed
+
+# An agent READS a config file — secrets come back redacted:
+$ alice read config.yaml
+api_token: <agent-vault:stripe-key>      # never the real value
+
+# Only a HUMAN at a terminal can reveal a raw value (gated on isatty):
+$ alice get stripe-key --reveal          # works at your keyboard; refuses when piped or run by an agent
+```
+
+That last line is the core idea: the two commands that put plaintext on screen
+require a TTY, so an autonomous agent — even one hijacked by prompt injection —
+**structurally cannot exfiltrate a secret to its own output.**
+
+> **Successor to [agent-vault](https://www.npmjs.com/package/@kaka-milan-22/agent-vault)**
+> (TypeScript): same command surface and redaction model, but key custody is
+> split into a separate authenticated service. agent-vault stored its AES master
+> key in a plaintext file next to the ciphertext — any process running as you
+> could decrypt everything. AnB removes the key from the client entirely.
 
 ---
 
