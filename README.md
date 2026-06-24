@@ -9,6 +9,8 @@ so a stolen laptop, a leaked repo, or a hijacked agent never yields a plaintext
 secret. It's the envelope-encryption / KMS pattern (AWS KMS, Vault transit)
 shrunk to a single self-hosted Go binary you fully control.
 
+![AnB demo — read redacts secrets, the TTY gate refuses to pipe a reveal, and an agent injects a secret into a child process without it ever being printed](docs/anb-demo.gif)
+
 ```sh
 # An agent USES a secret without ever seeing it:
 alice exec --env GH_TOKEN='<agent-vault:gh-pat>' -- /opt/homebrew/bin/gh api user
