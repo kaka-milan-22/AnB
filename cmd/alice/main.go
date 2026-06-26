@@ -61,7 +61,7 @@ func main() {
 	}
 
 	cmds := map[string]func([]string) error{
-		"read": cmdRead, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
+		"read": cmdRead, "redact": cmdRedact, "write": cmdWrite, "has": cmdHas, "list": cmdList, "status": cmdStatus, "exec": cmdExec,
 		"set": cmdSet, "get": cmdGet, "rm": cmdRm, "desc": cmdDesc, "import": cmdImport, "gen": cmdGen,
 		"completion": cmdCompletion, "__complete-keys": cmdCompleteKeys,
 		"init": cmdInit, "scan": cmdScan, "template": cmdTemplate, "shell": cmdShell,
@@ -112,10 +112,11 @@ func usage() {
 
 	fmt.Fprint(w, "\nCommands:\n")
 	fmt.Fprintf(w, row, "read <file>", "Read a file with secrets redacted (safe for agents)")
+	fmt.Fprintf(w, row, "redact", "Redact stdin → stdout (replace secret values with placeholders; safe for agents)")
 	fmt.Fprintf(w, row, "write [options] <file>", "Write a file, restoring <agent-vault:key> placeholders (safe for agents)")
 	fmt.Fprintf(w, row, "has <keys...>", "Check if secrets exist in the vault (safe for agents)")
 	fmt.Fprintf(w, row, "list [-l] [--json] [glob]", "List secret key names; -l adds length/strength/master-key columns; glob filters (safe)")
-	fmt.Fprintf(w, row, "status", "Show enrollment and Bob reachability/unlock state (safe for agents)")
+	fmt.Fprintf(w, row, "status [--json]", "Show enrollment and Bob reachability/unlock state (safe for agents)")
 	fmt.Fprintf(w, row, "exec [--env KEY=V]... -- <cmd>", "Resolve <agent-vault:k> in --env values, syscall.Exec the child (safe for agents)")
 	fmt.Fprintf(w, row, "set [options] <key>", "Store a secret (safe; non-TTY needs --from-env/--stdin/--generate)")
 	fmt.Fprintf(w, row, "get [options] <key>", "View metadata (safe); --json for scripts; --reveal prints the value (TTY only)")

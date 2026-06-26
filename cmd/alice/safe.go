@@ -42,6 +42,31 @@ func cmdRead(args []string) error {
 	return nil
 }
 
+// redact — stdin redaction filter (safe for agents). Reads stdin, replaces
+// known secret values and high-entropy unvaulted tokens with <agent-vault:key>
+// placeholders, and writes the redacted result to stdout. Same engine as
+// `read`, but stream-oriented: lets a caller (e.g. the AnB-MCP server) scrub
+// captured command output without ever writing the plaintext to disk. Never
+// reveals a value.
+func cmdRedact(args []string) error {
+	fs := newFS("redact")
+	dir := dirFlag(fs)
+	parse(fs, args)
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("read stdin: %w", err)
+	}
+	s := localvault.Open(*dir)
+	vals := map[string]string{}
+	if s.VaultExists() {
+		if vals, err = decryptAllValues(s); err != nil {
+			return err
+		}
+	}
+	fmt.Print(redact.Redact(string(raw), vals))
+	return nil
+}
+
 func printCatN(redacted, raw string) {
 	lines := strings.Split(redacted, "\n")
 	if strings.HasSuffix(raw, "\n") && len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -252,8 +277,15 @@ func cmdList(args []string) error {
 func cmdStatus(args []string) error {
 	fs := newFS("status")
 	dir := dirFlag(fs)
+	asJSON := fs.Bool("json", false, "output as JSON")
 	parse(fs, args)
 	s := localvault.Open(*dir)
+
+	if *asJSON {
+		b, _ := json.MarshalIndent(gatherStatus(s), "", "  ")
+		fmt.Println(string(b))
+		return nil
+	}
 
 	cfg, err := s.LoadConfig()
 	if err != nil {
@@ -286,6 +318,54 @@ func cmdStatus(args []string) error {
 		fmt.Println("Bob status: locked")
 	}
 	return nil
+}
+
+// statusInfo is the structured form of `alice status`, emitted by --json.
+type statusInfo struct {
+	Enrolled     bool   `json:"enrolled"`
+	Identity     string `json:"identity,omitempty"`
+	BobAddr      string `json:"bob_addr,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	ClientCert   bool   `json:"client_cert"`
+	BobReachable bool   `json:"bob_reachable"`
+	BobUnlocked  bool   `json:"bob_unlocked"`
+	IdleTTLSec   int    `json:"idle_ttl_seconds,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// gatherStatus collects the same state cmdStatus prints, into a struct for the
+// --json path. Mirrors the text path's staged early-returns so json and text
+// report the same thing at every stage (not enrolled / no cert / unreachable).
+func gatherStatus(s *localvault.Store) statusInfo {
+	var info statusInfo
+	cfg, err := s.LoadConfig()
+	if err != nil {
+		return info // enrolled=false
+	}
+	info.Enrolled = true
+	info.Identity = cfg.Identity
+	info.BobAddr = cfg.BobAddr
+	info.ServerName = cfg.ServerName
+	if _, e := os.Stat(s.ClientCertPath()); e != nil {
+		return info // client_cert=false
+	}
+	info.ClientCert = true
+	cl, _, err := loadClient(s)
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+	unlocked, ttl, err := cl.Status()
+	if err != nil {
+		info.Error = err.Error()
+		return info // bob_reachable=false
+	}
+	info.BobReachable = true
+	info.BobUnlocked = unlocked
+	if unlocked && ttl > 0 {
+		info.IdleTTLSec = int(ttl)
+	}
+	return info
 }
 
 func plural(n int) string {

@@ -397,6 +397,59 @@ func TestAliceExecHappyPath(t *testing.T) {
 	}
 }
 
+func TestAliceRedactStdin(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+	h.seedSecret(t, "redact-key", "super-secret-value-123")
+
+	cmd := exec.Command(h.alicePath, "redact")
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	cmd.Stdin = strings.NewReader("config: token=super-secret-value-123 end\n")
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("alice redact: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "super-secret-value-123") {
+		t.Errorf("redact leaked the secret value: %q", got)
+	}
+	if !strings.Contains(got, "<agent-vault:redact-key>") {
+		t.Errorf("redact should insert the placeholder; got %q", got)
+	}
+}
+
+func TestAliceStatusJSON(t *testing.T) {
+	h := newExecHarness(t)
+	defer h.cleanup()
+
+	cmd := exec.Command(h.alicePath, "status", "--json")
+	cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("alice status --json: %v", err)
+	}
+	var st struct {
+		Enrolled     bool   `json:"enrolled"`
+		Identity     string `json:"identity"`
+		BobReachable bool   `json:"bob_reachable"`
+		BobUnlocked  bool   `json:"bob_unlocked"`
+	}
+	if err := json.Unmarshal(out, &st); err != nil {
+		t.Fatalf("status --json not valid JSON: %v\noutput: %s", err, out)
+	}
+	if !st.Enrolled {
+		t.Errorf("expected enrolled=true; got %+v", st)
+	}
+	if st.Identity != "e2e-exec-alice" {
+		t.Errorf("identity: got %q want e2e-exec-alice", st.Identity)
+	}
+	if !st.BobReachable || !st.BobUnlocked {
+		t.Errorf("expected bob reachable+unlocked; got %+v", st)
+	}
+}
+
 func TestAliceExecFailClosedOnMissingKey(t *testing.T) {
 	h := newExecHarness(t)
 	defer h.cleanup()
