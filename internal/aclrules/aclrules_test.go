@@ -244,10 +244,10 @@ func TestParseInvalidEnvName(t *testing.T) {
 }
 
 func TestParseTooManyFields(t *testing.T) {
-	body := "^/bin/foo$\tKEY\t# label\textra\n"
+	body := "^/bin/foo$\tKEY\t# label\tmcp\textra\n"
 	_, errs := Parse(strings.NewReader(body))
 	if len(errs) == 0 {
-		t.Error("expected parse error for >3 tab-separated fields")
+		t.Error("expected parse error for >4 tab-separated fields")
 	}
 }
 

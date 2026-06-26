@@ -153,11 +153,16 @@ func cmdExec(args []string) error {
 	reasonFlag := fs.String("reason", "", `audit-only "why" string; logged in Bob's ALLOW line. If unset, a matched allowlist entry's label (if any) is used as "[label]".`)
 	showMatchString := fs.Bool("show-match-string", false,
 		"print the canonical match string used by exec-allowlist.rules and exit (no execution)")
+	surfaceFlag := fs.String("surface", "cli",
+		"rule surface: cli (operator, default) or mcp (agent-facing — sees only scope=mcp rules)")
 	if err := fs.Parse(aliceArgs); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected positional args before --: %v (place args after --)", fs.Args())
+	}
+	if !aclrules.IsKnownSurface(*surfaceFlag) {
+		return fmt.Errorf("--surface %q: unknown surface (known: cli, mcp)", *surfaceFlag)
 	}
 
 	// Parse --env flags. Empty VALUE is rejected here (see EA1).
@@ -218,6 +223,11 @@ func cmdExec(args []string) error {
 		return err
 	}
 
+	// Surface gate: keep only rules tagged for this surface before matching.
+	// On --surface mcp, default (cli-only) rules are invisible — the agent path
+	// is default-deny until the operator explicitly tags a rule scope=mcp.
+	rules = aclrules.FilterBySurface(rules, *surfaceFlag)
+
 	matchStr := aclrules.Canonicalize(cmdName, childArgs)
 
 	var matched *aclrules.Rule
@@ -236,7 +246,11 @@ func cmdExec(args []string) error {
 		// Require BOTH stdin AND stderr to be TTYs — otherwise the prompt
 		// is invisible (stderr redirected) or unanswerable (stdin piped),
 		// and the operator would be typing into a black hole.
-		if term.StdinIsTTY() && term.IsTTY(os.Stderr) {
+		//
+		// Only the cli surface may auto-bless. The mcp surface must never
+		// offer it (defense-in-depth: an agent must not be able to grant
+		// itself a rule — only the operator hand-edits scope=mcp in).
+		if *surfaceFlag == "cli" && term.StdinIsTTY() && term.IsTTY(os.Stderr) {
 			fmt.Fprintln(os.Stderr, denyMsg)
 			if confirmAppend(os.Stdin, os.Stderr) {
 				line := aclrules.LiteralRule(cmdName, childArgs, envNames,
@@ -392,8 +406,10 @@ func appendRuleLine(path, line string) error {
 	}
 	if st.Size() == 0 {
 		header := `# AnB exec-allowlist rules. One rule per line:
-#   <regex>\t<env-csv>\t#<label>
-# All fields after the first are optional. Implicit ^...$ anchor.
+#   <regex>\t<env-csv>\t#<label>\t<scope-csv>
+# Fields after the first are optional. Implicit ^...$ anchor.
+# scope = cli (default) and/or mcp; omitted means cli-only, so agents
+# (the mcp surface) never see the rule. Add "mcp" to expose it to agents.
 # Default deny: unmatched invocations are rejected.
 
 `

@@ -1,9 +1,12 @@
 // Package aclrules implements alice's regex-based execution allowlist.
 //
 // An allowlist file is plain text. Each non-empty, non-comment line is a
-// rule consisting of up to three tab-separated fields: a Go RE2 regex
+// rule consisting of up to four tab-separated fields: a Go RE2 regex
 // (implicitly anchored), a comma-separated set of allowed env-var names,
-// and an optional "#"-prefixed label for audit attribution.
+// an optional "#"-prefixed label for audit attribution, and an optional
+// comma-separated scope (surfaces the rule applies to: "cli" and/or "mcp").
+// A missing scope defaults to {"cli"}, so unscoped rules never apply to the
+// agent-facing mcp surface.
 //
 // alice canonicalises each "alice exec" invocation as
 //
@@ -59,8 +62,44 @@ type Rule struct {
 	EnvAllow []string       // env names allowed (empty -> no --env; order preserved from source)
 	EnvAny   bool           // env column was "*" -> any env name allowed
 	Label    string         // audit label from field 3 (empty if no label)
+	Scope    []string       // surfaces this rule applies to (field 4); defaults to {"cli"}
 	LineNo   int            // 1-based line number in source file
 	Raw      string         // original line, for error context
+}
+
+// knownSurfaces is the closed set of execution surfaces a rule may be scoped
+// to. "cli" = the operator's interactive/CLI use; "mcp" = the agent-facing MCP
+// server (untrusted). Unknown names are rejected at parse time to catch typos.
+var knownSurfaces = map[string]bool{"cli": true, "mcp": true}
+
+// AppliesTo reports whether this rule is active on the given execution surface.
+// A rule with no explicit scope defaults to {"cli"}, so unscoped rules never
+// apply to the mcp surface — agents see only rules the operator explicitly
+// tagged "mcp".
+func (r *Rule) AppliesTo(surface string) bool {
+	for _, s := range r.Scope {
+		if s == surface {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKnownSurface reports whether s is a recognized execution surface.
+func IsKnownSurface(s string) bool { return knownSurfaces[s] }
+
+// FilterBySurface returns the subset of rules active on the given surface,
+// preserving source order. Rules whose scope does not include surface are
+// dropped, so on the "mcp" surface the default (cli-only) rules are invisible —
+// the agent path is default-deny until the operator tags a rule "mcp".
+func FilterBySurface(rules []Rule, surface string) []Rule {
+	out := make([]Rule, 0, len(rules))
+	for i := range rules {
+		if rules[i].AppliesTo(surface) {
+			out = append(out, rules[i])
+		}
+	}
+	return out
 }
 
 // Parse reads rule lines from r and returns the parsed rules plus any
@@ -96,8 +135,8 @@ func Parse(r io.Reader) ([]Rule, []error) {
 
 func parseLine(line string, lineNo int) (Rule, error) {
 	fields := strings.Split(line, "\t")
-	if len(fields) > 3 {
-		return Rule{}, fmt.Errorf("line %d: %d tab-separated fields, max 3 (got %q)", lineNo, len(fields), line)
+	if len(fields) > 4 {
+		return Rule{}, fmt.Errorf("line %d: %d tab-separated fields, max 4 (got %q)", lineNo, len(fields), line)
 	}
 
 	// rxRaw is kept verbatim — leading/trailing whitespace is significant
@@ -108,11 +147,15 @@ func parseLine(line string, lineNo int) (Rule, error) {
 	rxRaw := fields[0]
 	envCol := ""
 	labelCol := ""
+	scopeCol := ""
 	if len(fields) >= 2 {
 		envCol = fields[1]
 	}
 	if len(fields) >= 3 {
 		labelCol = fields[2]
+	}
+	if len(fields) >= 4 {
+		scopeCol = fields[3]
 	}
 
 	// Anchor implicitly. Operator may add their own ^ / $ — harmless
@@ -134,14 +177,44 @@ func parseLine(line string, lineNo int) (Rule, error) {
 		return Rule{}, err
 	}
 
+	scope, err := parseScopeColumn(scopeCol, lineNo)
+	if err != nil {
+		return Rule{}, err
+	}
+
 	return Rule{
 		Regex:    rx,
 		EnvAllow: envAllow,
 		EnvAny:   envAny,
 		Label:    label,
+		Scope:    scope,
 		LineNo:   lineNo,
 		Raw:      line,
 	}, nil
+}
+
+// parseScopeColumn parses the optional 4th field: a comma-separated set of
+// surfaces this rule applies to. Empty/absent defaults to {"cli"} — so existing
+// and unscoped rules are invisible to the mcp surface (default-deny for agents;
+// the operator must explicitly add "mcp" to expose a rule to the agent path).
+func parseScopeColumn(col string, lineNo int) ([]string, error) {
+	col = strings.TrimSpace(col)
+	if col == "" {
+		return []string{"cli"}, nil
+	}
+	parts := strings.Split(col, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		name := strings.TrimSpace(p)
+		if name == "" {
+			return nil, fmt.Errorf("line %d: empty surface in scope %q", lineNo, col)
+		}
+		if !knownSurfaces[name] {
+			return nil, fmt.Errorf("line %d: unknown surface %q in scope (known: cli, mcp)", lineNo, name)
+		}
+		out = append(out, name)
+	}
+	return out, nil
 }
 
 func parseEnvColumn(col string, lineNo int) ([]string, bool, error) {
