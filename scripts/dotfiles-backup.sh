@@ -1,7 +1,7 @@
 #!/bin/sh
 #
-# dotfiles-backup.sh — scan / backup / restore / list your dotfiles + claude
-# skills as a single age-encrypted tarball. Sibling of anb-vault.sh: same age +
+# dotfiles-backup.sh — scan / backup / restore / list your dotfiles + Claude
+# and Codex skills as a single age-encrypted tarball. Sibling of anb-vault.sh: same age +
 # tar model, no chezmoi, no lock-in (restore is plain `age -d | tar -x`).
 #
 #   dotfiles-backup.sh scan
@@ -27,9 +27,17 @@ PATHS="
 .zprofile
 .gitconfig
 .tmux.conf
+.anb/alice/exec-allowlist.rules
+.claude/CLAUDE.md
+.claude/settings.json
+.claude/commands
+.claude/agents
 .claude/skills
+.codex/AGENTS.md
+.codex/config.toml
+.codex/rules
+.codex/skills
 .config/git
-.config/gh
 "
 
 # ---- junk excluded from the tarball (tar syntax) ---------------------------
@@ -67,7 +75,7 @@ present_paths() {
 find_files() {
   find "$HOME/$1" -type f \
     ! -name '*.pyc' ! -name '*.log' ! -name '*.tar.gz' \
-    ! -path '*/__pycache__/*' ! -path '*/.git/*' 2>/dev/null
+    ! -name '.DS_Store' ! -path '*/__pycache__/*' ! -path '*/.git/*' 2>/dev/null
 }
 
 # ---- danger scan: sets global SCAN_HARD (count of hard findings) -----------
@@ -83,13 +91,20 @@ scan() {
 
   info ""
   info "── DANGER scan ──"
-  # 1. secret-format CONTENT (real key material / JWTs). age keys are UPPERCASE.
+  # 1. secret-format CONTENT. Report filenames only; never print matched values.
   hits=""
   for p in $(present_paths); do
     h=$(find_files "$p" | while IFS= read -r f; do
           grep -IlE -e 'AGE-SECRET-KEY-1[0-9A-Za-z]' \
                     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
-                    -e 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' "$f" 2>/dev/null || true
+                    -e 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' \
+                    -e 'gh[pousr]_[A-Za-z0-9]{20,}' \
+                    -e 'github_pat_[A-Za-z0-9_]{20,}' \
+                    -e 'sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}' \
+                    -e '(AKIA|ASIA)[A-Z0-9]{16}' \
+                    -e 'xox[baprs]-[A-Za-z0-9-]{20,}' \
+                    -e "(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)[[:space:]]*[:=][[:space:]]*['\"]?[A-Za-z0-9_./+=:-]{12,}" \
+                    "$f" 2>/dev/null || true
         done)
     if [ -n "$h" ]; then hits="$hits$h
 "; fi
@@ -102,8 +117,8 @@ scan() {
   # 2. dangerous FILENAMES
   names=""
   for p in $(present_paths); do
-    nf=$(find "$HOME/$p" -type f \( -name '*.key' -o -name '*.pem' -o -name 'id_rsa' \
-        -o -name 'id_ed25519' -o -name '.netrc' \) 2>/dev/null || true)
+    nf=$(find_files "$p" | LC_ALL=C awk -F/ \
+      '$NF ~ /\.(key|pem)$/ || $NF == "id_rsa" || $NF == "id_ed25519" || $NF == ".netrc" { print }')
     if [ -n "$nf" ]; then names="$names$nf
 "; fi
   done
@@ -115,7 +130,10 @@ scan() {
   # 3. SOFT: large files (>1MB)
   big=""
   for p in $(present_paths); do
-    b=$(find "$HOME/$p" -type f -size +1M ! -path '*/.git/*' 2>/dev/null || true)
+    b=$(find_files "$p" | while IFS= read -r f; do
+      size=$(wc -c <"$f" 2>/dev/null || printf '0')
+      if [ "$size" -gt 1048576 ] 2>/dev/null; then printf '%s\n' "$f"; fi
+    done)
     if [ -n "$b" ]; then big="$big$b
 "; fi
   done
@@ -160,6 +178,7 @@ prune_remote() {
 
 # ---- backup ----------------------------------------------------------------
 cmd_backup() {
+  umask 077
   outdir=""; recipient=""; rfile=""; pass=0; upload=""; noupload=0; force=0; keep="$KEEP_DEFAULT"
   while [ $# -gt 0 ]; do case "$1" in
     -o) outdir="$2"; shift 2;;
@@ -177,6 +196,7 @@ cmd_backup() {
   elif [ -z "$upload" ]; then upload="$UPLOAD_DEFAULT"; fi
   [ -n "$outdir" ] || outdir="$OUTDIR_DEFAULT"
   mkdir -p "$outdir"; chmod 700 "$outdir" 2>/dev/null || true
+  outdir=$(cd "$outdir" && pwd -P) || die "cannot resolve output directory: $outdir"
   command -v age >/dev/null 2>&1 || die "age not on PATH (brew install age)"
 
   scan
@@ -195,12 +215,26 @@ cmd_backup() {
   fi
 
   paths=$(present_paths); [ -n "$paths" ] || die "nothing to back up"
-  out="$outdir/dotfiles-$(now_ts).age"; tmp="$out.tmp.$$"
+  out="$outdir/dotfiles-$(now_ts).age"
+  archive_tmp=$(mktemp "$outdir/.dotfiles-archive.XXXXXX") || die "cannot create temporary archive"
+  age_tmp=""
+  trap 'rm -f "${archive_tmp:-}" "${age_tmp:-}"' 0
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  age_tmp=$(mktemp "$outdir/.dotfiles-encrypted.XXXXXX") || die "cannot create temporary encrypted file"
+
+  # Build and validate the tar first. A pipeline cannot reliably detect tar
+  # failure under POSIX sh because it has no pipefail.
   # shellcheck disable=SC2086
-  if ( cd "$HOME" && tar -cf - $TAR_EXCLUDES $paths ) | age "$@" > "$tmp"; then
-    [ -s "$tmp" ] || { rm -f "$tmp"; die "age produced empty output"; }
-    mv "$tmp" "$out"; chmod 600 "$out"
-  else rm -f "$tmp"; die "encryption failed"; fi
+  ( cd "$HOME" && tar -cf "$archive_tmp" $TAR_EXCLUDES $paths ) || die "archive creation failed"
+  [ -s "$archive_tmp" ] || die "tar produced an empty archive"
+  age "$@" "$archive_tmp" > "$age_tmp" || die "encryption failed"
+  [ -s "$age_tmp" ] || die "age produced empty output"
+  rm -f "$archive_tmp"; archive_tmp=""
+  mv "$age_tmp" "$out"; age_tmp=""
+  chmod 600 "$out"
+  trap - 0 HUP INT TERM
   ok "backup → $out ($(wc -c <"$out" | tr -d ' ') bytes)"
   prune_old "$outdir" "$keep"
 
@@ -218,6 +252,7 @@ cmd_backup() {
 
 # ---- restore (to a fresh dir, never clobbers $HOME) ------------------------
 cmd_restore() {
+  umask 077
   file="${1:-}"; shift 2>/dev/null || true
   [ -n "$file" ] || die "usage: restore <file.age> [-i identity] [-C dir]"
   identity=""; dest=""
@@ -230,24 +265,33 @@ cmd_restore() {
   [ -n "$dest" ] || dest="./dotfiles-restored-$(now_ts)"
   [ -f "$file" ] || die "not found: $file"
   command -v age >/dev/null 2>&1 || die "age not on PATH"
-  mkdir -p "$dest"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    die "destination already exists: $dest (restore requires a new directory)"
+  fi
+  mkdir -p "$(dirname "$dest")"
+  mkdir "$dest" || die "cannot create restore directory: $dest"
   set -- -d; [ -n "$identity" ] && set -- "$@" -i "$identity"
   # Decrypt to a temp tarball first so we can validate member paths BEFORE
   # extracting — a streamed `age | tar -x` would commit the write before we
   # could reject a path-traversal archive.
   tmptar="$dest/.archive.tar"
+  trap 'rm -f "${tmptar:-}"' 0
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if ! age "$@" "$file" > "$tmptar" 2>/dev/null; then
-    rm -f "$tmptar"; die "decrypt failed (wrong -i identity or passphrase?)"
+    die "decrypt failed (wrong -i identity or passphrase?)"
   fi
   if ! tar_safe "$tmptar"; then
-    rm -f "$tmptar"; die "refusing to extract $file: archive has absolute or '..' paths (possible path-traversal attack)"
+    die "refusing to extract $file: archive has absolute or '..' paths (possible path-traversal attack)"
   fi
   if tar -xpf "$tmptar" -C "$dest"; then
-    rm -f "$tmptar"
+    rm -f "$tmptar"; tmptar=""
+    trap - 0 HUP INT TERM
     ok "restored → $dest"
     info "review it, then copy what you want into place yourself (it did NOT touch \$HOME)"
   else
-    rm -f "$tmptar"; die "extract failed (archive truncated?)"
+    die "extract failed (archive truncated?)"
   fi
 }
 
@@ -276,7 +320,7 @@ case "$sub" in
   restore) cmd_restore "$@";;
   list)    cmd_list "$@";;
   ""|-h|--help) cat >&2 <<EOF
-dotfiles-backup.sh — age-encrypted backup of dotfiles + claude skills
+dotfiles-backup.sh — age-encrypted backup of dotfiles + Claude/Codex skills
 
   scan                              list packable files + flag dangerous ones
   backup [-o DIR] [-r REC|-R F|-p] [-k N] [--upload REMOTE | --no-upload] [--force]
