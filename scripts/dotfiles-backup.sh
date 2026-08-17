@@ -92,10 +92,13 @@ scan() {
   info ""
   info "── DANGER scan ──"
   # 1. secret-format CONTENT. Report filenames only; never print matched values.
+  #    Match exported shell secrets case-insensitively too: e.g.
+  #    `export ENCIPHERR_KEY="..."` is a secret even though it does not look
+  #    like a PEM, JWT, or a provider-specific token.
   hits=""
   for p in $(present_paths); do
     h=$(find_files "$p" | while IFS= read -r f; do
-          grep -IlE -e 'AGE-SECRET-KEY-1[0-9A-Za-z]' \
+          grep -IliE -e 'AGE-SECRET-KEY-1[0-9A-Za-z]' \
                     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
                     -e 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' \
                     -e 'gh[pousr]_[A-Za-z0-9]{20,}' \
@@ -104,6 +107,7 @@ scan() {
                     -e '(AKIA|ASIA)[A-Z0-9]{16}' \
                     -e 'xox[baprs]-[A-Za-z0-9-]{20,}' \
                     -e "(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)[[:space:]]*[:=][[:space:]]*['\"]?[A-Za-z0-9_./+=:-]{12,}" \
+                    -e "(^|[[:space:];])export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(key|secret|token|password|private)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*['\"]?[^[:space:]'\"]{12,}" \
                     "$f" 2>/dev/null || true
         done)
     if [ -n "$h" ]; then hits="$hits$h
