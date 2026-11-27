@@ -1,32 +1,33 @@
 # Alice and Bob (AnB)
 
-**A secrets vault your AI agent can _use_ but never _read_.**
+**Use secrets without putting plaintext passwords or tokens in agent prompts or commands.**
 
 `alice` (the CLI your agents, scripts, and cron jobs call) keeps only
 AES-256-GCM ciphertext on disk and runs a redaction engine. The master key lives
-in a separate mTLS daemon, **`bob`**, which acts as an encrypt/decrypt oracle —
-so a stolen laptop, a leaked repo, or a hijacked agent never yields a plaintext
-secret. It's the envelope-encryption / KMS pattern (AWS KMS, Vault transit)
-shrunk to a single self-hosted Go binary you fully control.
+in a separate mTLS daemon, **`bob`**, which handles encryption and decryption.
+
+`alice exec` resolves placeholders into environment variables for the allowlisted
+program. The program inherits stdout and stderr directly. AnB does not capture
+or redact either stream. The program is responsible for keeping secrets out of
+its output and any logs it writes.
 
 ![AnB demo — read redacts secrets, the TTY gate refuses to pipe a reveal, and an agent injects a secret into a child process without it ever being printed](docs/anb-demo.gif)
 
 ```sh
-# An agent USES a secret without ever seeing it:
+# The agent references the token by name:
 alice exec --env GH_TOKEN='<agent-vault:gh-pat>' -- /opt/homebrew/bin/gh api user
-#   → the real token is injected into gh's environment at the last moment, never printed
+#   → the real token is injected into gh's environment when gh starts
 
 # An agent READS a config file — secrets come back redacted:
 $ alice read config.yaml
 api_token: <agent-vault:stripe-key>      # never the real value
 
-# Only a HUMAN at a terminal can reveal a raw value (gated on isatty):
-$ alice get stripe-key --reveal          # works at your keyboard; refuses when piped or run by an agent
+# Explicit reveal requires a TTY:
+$ alice get stripe-key --reveal          # refuses when stdout is piped
 ```
 
-That last line is the core idea: the two commands that put plaintext on screen
-require a TTY, so an autonomous agent — even one hijacked by prompt injection —
-**structurally cannot exfiltrate a secret to its own output.**
+An agent that can allocate a PTY can satisfy the TTY check. See the
+[trust boundary](#trust-boundary-read-this) for deployment assumptions.
 
 > **Successor to [agent-vault](https://www.npmjs.com/package/@kaka-milan-22/agent-vault)**
 > (TypeScript): same command surface and redaction model, but key custody is
@@ -84,9 +85,8 @@ request against it (like Kubernetes client-cert auth).
 - **Agent-safe by default** — almost every command works without a TTY (`read`,
   `write`, `exec`, `template`, `scan`, `set`, `import`, `rm`, …). Only the two
   that expose a *raw value* (`get --reveal`) or an *un-gated injection shell*
-  (`shell`) require an interactive terminal, so an agent — even under prompt
-  injection — structurally can't dump plaintext to its terminal. Confidentiality
-  beyond that is enforced by Bob's per-identity authz, not by the TTY split.
+  (`shell`) require an interactive terminal. Bob authorizes secret operations
+  per identity.
 - **Agent-safe exec (operator-allowlisted)** — `alice exec --env KEY=<agent-vault:k> -- <cmd> <args>`
   is default-deny since v2.0.0. Operator pre-blesses exact
   Go RE2 regex rules in `~/.anb/alice/exec-allowlist.rules`.
@@ -180,12 +180,9 @@ binary's embedded `runtime/debug.BuildInfo`.
 ## Quick start
 
 > **New here?** AnB lets your scripts and AI agents *use* secrets (API tokens,
-> DB passwords, kubeconfigs) without ever seeing the plaintext. You reference a
-> secret by name — `<agent-vault:KEY>` — and `alice` injects the real value into
-> a command or file at the last moment. The master key never lives on the client;
-> it stays inside a separate daemon (`bob`) you unlock once. Commands that *reveal*
-> values require a human terminal, so an agent — even hijacked by prompt
-> injection — structurally can't exfiltrate a secret.
+> DB passwords, kubeconfigs) by name. Use `<agent-vault:KEY>` in the command
+> and Alice resolves the value into the target program's environment or a
+> rendered file. Bob holds the master key.
 
 ### Local quick start (5 minutes)
 
@@ -212,23 +209,23 @@ alice install-cert ./alice-local.crt --no-pair
 alice status                          # → Bob status: unlocked
 
 # --- store a secret (interactive prompt; or non-TTY with --from-env/--stdin/--generate) ---
-alice set stripe-key                  # prompts for the value
+alice set gh-pat                      # prompts for the value
 ```
 
 Then use it three ways — pick by *who* runs the command:
 
 ```sh
-# (a) agent / script (no TTY): inject into a command — value is never printed.
+# (a) agent / script (no TTY): inject a secret into a program that reads it from the environment.
 #     The command must be an ABSOLUTE path, and an operator must first bless a
 #     matching rule in ~/.anb/alice/exec-allowlist.rules (default-deny).
-alice exec --env STRIPE_KEY='<agent-vault:stripe-key>' \
-  -- /usr/bin/curl -sS -u "$STRIPE_KEY:" https://api.stripe.com/v1/charges
+alice exec --env GH_TOKEN='<agent-vault:gh-pat>' \
+  -- /opt/homebrew/bin/gh api user
 
-# (b) render a file: placeholders → real values, written atomically
-printf 'token: <agent-vault:stripe-key>\n' | alice write ./config.yaml
+# (b) render a file in a private directory; use alice template for atomic replacement.
+printf 'token: <agent-vault:gh-pat>\n' | alice write ./config.yaml
 
 # (c) human one-off: reveal the value (TTY required)
-alice get stripe-key --reveal
+alice get gh-pat --reveal
 ```
 
 **For AI agents:** install the bundled skill at `skills/anb-secrets/` into your
@@ -449,8 +446,8 @@ when stdout isn't a TTY, which is why the script routes through a temp file.)
 
 ### alice — agent-safe (no TTY required)
 
-Almost the entire surface. A value never reaches your terminal — it flows into a
-child process (`exec`), a file (`write`/`template`), or stays as metadata.
+These commands can run without a TTY. `exec` passes resolved values to the
+program through its environment. `write` and `template` restore them into files.
 
 | Command | Description |
 |---|---|
