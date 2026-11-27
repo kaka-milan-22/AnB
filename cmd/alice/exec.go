@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/aclrules"
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/redact"
 	"github.com/kaka-milan-22/AnB/v3/internal/term"
@@ -57,13 +58,13 @@ func parseEnvFlag(raw []string) ([]envEntry, map[string]struct{}, error) {
 		if bad := redact.FindSuspiciousPlaceholders(val); len(bad) > 0 {
 			first := bad[0]
 			inner := first[1 : len(first)-1] // strip `<` and `>`
-			if keyFormat.MatchString(inner) {
+			if keyname.Valid(inner) {
 				return nil, nil, fmt.Errorf(
 					"--env %q: value contains %q which looks like a placeholder but is missing the `agent-vault:` prefix. Did you mean `<agent-vault:%s>`?",
 					e, first, inner)
 			}
 			return nil, nil, fmt.Errorf(
-				"--env %q: value contains %q which looks like a placeholder but doesn't match the `<agent-vault:KEY>` grammar (valid KEY is lowercase alphanumeric + hyphens)",
+				"--env %q: value contains %q which looks like a placeholder but doesn't match the `<agent-vault:KEY>` grammar (use KEY or NAMESPACE.KEY)",
 				e, first)
 		}
 		entries = append(entries, envEntry{Name: name, Value: val})

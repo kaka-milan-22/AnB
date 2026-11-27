@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/kaka-milan-22/AnB/v3/internal/eth"
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/term"
 )
@@ -77,9 +78,10 @@ func cmdEthNew(args []string) error {
 	parse(fs, args)
 	requireTTY("alice eth new")
 
-	if !keyFormat.MatchString(*name) {
-		return fmt.Errorf("invalid --name %q (use lowercase alphanumeric + hyphens)", *name)
+	if !keyname.Valid(*name) {
+		return fmt.Errorf("invalid --name %q (use key or namespace.key)", *name)
 	}
+	*name = keyname.Canonical(*name)
 
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -144,6 +146,7 @@ func cmdEthAddress(args []string) error {
 	name := fs.String("name", ethDefaultName, "vault entry holding the mnemonic")
 	index := fs.Uint("index", 0, "BIP-44 index N for m/44'/60'/0'/0/N")
 	parse(fs, args)
+	*name = keyname.Canonical(*name)
 	// No TTY requirement — addresses are PUBLIC. Safe to pipe / log /
 	// post on Slack. The mnemonic stays inside this process.
 
@@ -170,6 +173,7 @@ func cmdEthShow(args []string) error {
 	reveal := fs.Bool("reveal-mnemonic", false, "also print the 24-word mnemonic (TTY only)")
 	index := fs.Uint("index", 0, "BIP-44 index N for the displayed address")
 	parse(fs, args)
+	*name = keyname.Canonical(*name)
 
 	if *reveal {
 		requireStdoutTTY("alice eth show --reveal-mnemonic")
@@ -227,9 +231,10 @@ func cmdEthImport(args []string) error {
 	parse(fs, args)
 	requireTTY("alice eth import")
 
-	if !keyFormat.MatchString(*name) {
-		return fmt.Errorf("invalid --name %q (use lowercase alphanumeric + hyphens)", *name)
+	if !keyname.Valid(*name) {
+		return fmt.Errorf("invalid --name %q (use key or namespace.key)", *name)
 	}
+	*name = keyname.Canonical(*name)
 
 	s := localvault.Open(*dir)
 	v, err := s.Load()
@@ -328,7 +333,7 @@ func cmdEthList(args []string) error {
 	// "BIP-39 mnemonic", plus everything in --include.
 	includeSet := make(map[string]bool, len(include))
 	for _, k := range include {
-		includeSet[k] = true
+		includeSet[keyname.Canonical(k)] = true
 	}
 	var matches []localvault.SecretEntry
 	var names []string

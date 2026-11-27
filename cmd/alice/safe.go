@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/redact"
 	"github.com/kaka-milan-22/AnB/v3/internal/strength"
@@ -190,7 +191,7 @@ func cmdHas(args []string) error {
 		res := map[string]bool{}
 		all := true
 		for _, k := range pos {
-			res[k] = v.Has(k)
+			res[k] = v.Has(keyname.Canonical(k))
 			all = all && res[k]
 		}
 		b, _ := json.Marshal(res)
@@ -202,7 +203,7 @@ func cmdHas(args []string) error {
 	}
 	all := true
 	for _, k := range pos {
-		ok := v.Has(k)
+		ok := v.Has(keyname.Canonical(k))
 		if len(pos) > 1 {
 			fmt.Printf("%s: %t\n", k, ok)
 		} else {
@@ -220,6 +221,8 @@ func cmdHas(args []string) error {
 // per-entry metadata columns (length, strength, master-key version) without decrypting.
 func cmdList(args []string) error {
 	fs := newFS("list")
+	ns := fs.String("ns", keyname.Default, "list short key names in this namespace")
+	all := fs.Bool("a", false, "list canonical key names across all namespaces")
 	dir := dirFlag(fs)
 	asJSON := fs.Bool("json", false, "output as JSON")
 	var long bool
@@ -231,10 +234,20 @@ func cmdList(args []string) error {
 	if err != nil {
 		return err
 	}
-	listing := v.List()
+	if !keyname.ValidNamespace(*ns) {
+		return fmt.Errorf("invalid namespace %q", *ns)
+	}
+	if *all && isSet(fs, "ns") {
+		return fmt.Errorf("-a and -ns cannot be combined")
+	}
+	namespace := *ns
+	if *all {
+		namespace = ""
+	}
+	listing := v.ListNamespace(namespace)
 	// Optional shell-style glob filter: `alice list 'test-*'`.
 	if len(pos) > 0 {
-		var f []localvault.Listing
+		f := listing[:0]
 		for _, l := range listing {
 			if ok, merr := filepath.Match(pos[0], l.Key); merr == nil && ok {
 				f = append(f, l)

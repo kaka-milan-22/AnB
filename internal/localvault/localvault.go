@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 )
 
 const Version = 1
@@ -190,8 +192,20 @@ func (v *Vault) Remove(key string) bool {
 
 // List returns key listings sorted by name.
 func (v *Vault) List() []Listing {
-	out := make([]Listing, 0, len(v.Secrets))
+	return v.ListNamespace("")
+}
+
+// ListNamespace returns sorted short names, or all canonical names for an empty namespace.
+func (v *Vault) ListNamespace(namespace string) []Listing {
+	out := make([]Listing, 0)
 	for k, e := range v.Secrets {
+		if namespace != "" {
+			ns, short := keyname.Split(k)
+			if ns != namespace {
+				continue
+			}
+			k = short
+		}
 		out = append(out, Listing{Key: k, Desc: e.Desc, KeyEpoch: e.KeyEpoch, LenBytes: e.LenBytes, EntropyBits: e.EntropyBits})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })

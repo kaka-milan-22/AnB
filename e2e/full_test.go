@@ -653,3 +653,75 @@ func TestAliceMigratesLegacyAllowlist(t *testing.T) {
 		t.Errorf(".json.bak should exist: %v", err)
 	}
 }
+
+func TestAliceKeyNamespaces(t *testing.T) {
+	h := newExecHarness(t)
+	h.seedSecret(t, "eth", "legacy fixture")
+	run := func(success bool, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(h.alicePath, args...)
+		cmd.Env = append(os.Environ(), "ANB_ALICE_DIR="+h.aliceDir)
+		cmd.Stdin = strings.NewReader("namespace fixture")
+		out, err := cmd.CombinedOutput()
+		if (err == nil) != success {
+			t.Fatalf("%v: %v, output %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run(true, "set", "kaka.eth", "--stdin")
+	run(true, "set", "default.old", "--stdin")
+	run(true, "set", "new-key", "--stdin")
+	for _, invalid := range []string{"kaka.a.b", ".eth", "kaka.", "default.kaka.eth"} {
+		run(false, "set", invalid, "--stdin")
+	}
+	for _, tc := range []struct {
+		flags []string
+		want  string
+	}{
+		{nil, "eth\nnew-key\nold"},
+		{[]string{"-ns", "default"}, "eth\nnew-key\nold"},
+		{[]string{"-ns", "kaka"}, "eth"},
+		{[]string{"-a"}, "eth\nkaka.eth\nnew-key\nold"},
+		{[]string{"-a", "kaka.*"}, "kaka.eth"},
+		{[]string{"-ns", "missing"}, ""},
+	} {
+		if got := run(true, append([]string{"list"}, tc.flags...)...); got != tc.want {
+			t.Errorf("list %v = %q, want %q", tc.flags, got, tc.want)
+		}
+	}
+	run(false, "list", "-ns", "kaka", "-a")
+	run(false, "list", "-ns", "kaka.eth")
+	run(true, "get", "default.eth", "--json")
+	run(true, "get", "kaka.eth", "--json")
+	run(true, "has", "default.eth", "eth", "kaka.eth")
+	if got := run(true, "list", "-ns", "kaka", "-l"); !strings.Contains(got, "eth") || strings.Contains(got, "kaka.eth") {
+		t.Fatalf("long list did not use short names: %s", got)
+	}
+	// Resolve a pre-namespace ciphertext and the new ciphertext in one batch.
+	path := filepath.Join(h.tmpDir, "rendered")
+	run(true, "write", path, "--content", "<agent-vault:default.eth>|<agent-vault:kaka.eth>")
+	if got := readFile(t, path); got != "legacy fixture|namespace fixture" {
+		t.Fatalf("placeholder round-trip = %q", got)
+	}
+	// Bob must bind the named ciphertext to the qualified key through AAD.
+	v, err := h.vault.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := v.Get("kaka.eth")
+	if !ok {
+		t.Fatal("missing canonical key")
+	}
+	if _, _, err := h.cl.Decrypt("eth", e.Value); !errors.Is(err, client.ErrDecryptFailed) {
+		t.Fatalf("decrypt with the wrong namespace: %v", err)
+	}
+	run(true, "rm", "*", "--yes")
+	if got := run(true, "list", "-a"); got != "kaka.eth" {
+		t.Fatalf("default rm removed named key: %q", got)
+	}
+	run(true, "rm", "kaka.*", "--yes")
+	if got := run(true, "list", "-a"); got != "" {
+		t.Fatalf("remaining keys: %q", got)
+	}
+}

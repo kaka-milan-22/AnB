@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 )
 
 const (
@@ -25,7 +27,7 @@ const (
 var (
 	// Key group is lowercase alnum+hyphens, so this never matches the uppercase
 	// UNVAULTED placeholders — the two are disjoint.
-	placeholderRE = regexp.MustCompile(`<agent-vault:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)>`)
+	placeholderRE = regexp.MustCompile(`<agent-vault:(` + keyname.Pattern + `)>`)
 	unvaultedRE   = regexp.MustCompile(`<agent-vault:UNVAULTED:sha256:([a-f0-9]{8,16})>`)
 
 	// looseAngleRE matches anything that looks like a placeholder (`<…>`
@@ -172,7 +174,7 @@ type RestoreResult struct {
 func Restore(content string, get func(key string) (string, bool)) RestoreResult {
 	var restored, missing []string
 	out := placeholderRE.ReplaceAllStringFunc(content, func(m string) string {
-		key := placeholderRE.FindStringSubmatch(m)[1]
+		key := keyname.Canonical(placeholderRE.FindStringSubmatch(m)[1])
 		val, ok := get(key)
 		if !ok {
 			missing = append(missing, key)
@@ -224,9 +226,10 @@ func ExtractPlaceholders(content string) []string {
 	var keys []string
 	seen := map[string]struct{}{}
 	for _, m := range placeholderRE.FindAllStringSubmatch(content, -1) {
-		if _, ok := seen[m[1]]; !ok {
-			seen[m[1]] = struct{}{}
-			keys = append(keys, m[1])
+		key := keyname.Canonical(m[1])
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			keys = append(keys, key)
 		}
 	}
 	return keys

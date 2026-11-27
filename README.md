@@ -111,6 +111,14 @@ request against it (like Kubernetes client-cert auth).
 
 ---
 
+### Key namespaces
+
+Use `alice set kaka.eth` and `alice get kaka.eth` for key `eth` in namespace `kaka`. Each component uses the existing lowercase key syntax. The dot separates the two components. Bare names belong to `default`, so `eth` and `default.eth` address the same entry. Upgrading from v3.4.1 preserves the existing vault and ciphertext. For older ciphertext, see [the AAD migration instructions](#upgrading-to-v341-aad-ciphertext-binding).
+
+`alice list` lists the default namespace. `alice list -ns kaka` shows short names in `kaka`. `alice list -a` shows canonical names across all namespaces. Glob filters match the displayed names. With `rm`, a bare glob selects only default keys, and `kaka.*` selects keys in `kaka`. Placeholders accept qualified names such as `<agent-vault:kaka.eth>`.
+
+Bob binds ciphertext to the canonical key name. In Bob's prefix policy, `kaka.` grants access to the entire namespace, `kaka.api-` grants a prefix within it, bare prefixes apply to default keys, and `*` still grants all keys. Upgrade Bob along with Alice before relying on namespace-scoped authorization.
+
 ## Trust boundary (read this)
 
 mTLS protects the **wire** and mutually authenticates both ends. It does **not**
@@ -152,7 +160,7 @@ protect the endpoints:
 
 ## Install
 
-Requires **Go 1.23+**.
+Requires **Go 1.26.3 or later**.
 
 ```sh
 # fastest: fetch the latest release straight onto your PATH
@@ -160,16 +168,16 @@ Requires **Go 1.23+**.
 # suffix for v2+. Tags v2.0.0 and v2.1.0 predate the /v2 module path
 # and cannot be installed via `go install`; tags v2.2.0–v2.6.1 live
 # under /v2/; v3.0.0+ lives under /v3/.
-go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.0.0
-go install github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.0.0
+go install github.com/kaka-milan-22/AnB/v3/cmd/bob@v3.5.0
+go install github.com/kaka-milan-22/AnB/v3/cmd/alice@v3.5.0
 
-# …or build from a local clone of the v3.0.0 tag
-git clone --branch v3.0.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
+# …or build from a local clone of the v3.5.0 tag
+git clone --branch v3.5.0 https://github.com/kaka-milan-22/AnB.git && cd AnB
 go build -o bin/bob   ./cmd/bob
 go build -o bin/alice ./cmd/alice
 ```
 
-Replace `v3.0.0` with `@latest` to track unreleased changes on `main`.
+Use `@latest` in place of `@v3.5.0` to install the latest tagged version. Restart Bob after replacing the binary so the daemon uses the updated authorization rules.
 
 After install, `alice version` / `bob version` (also `-V` / `--version`)
 prints the build info — tag, commit, Go version, platform — read from the
@@ -190,7 +198,7 @@ Everything on one machine. (Multi-machine / over-a-network uses the out-of-band
 pairing flow detailed below.)
 
 ```sh
-# install both binaries (Go 1.23+)
+# install both binaries (Go 1.26.3+)
 go install github.com/kaka-milan-22/AnB/v3/cmd/bob@latest
 go install github.com/kaka-milan-22/AnB/v3/cmd/alice@latest
 
@@ -344,7 +352,9 @@ alice set stripe-key
 alice set db-url --from-env DATABASE_URL
 
 # list / inspect
-alice list                       # list all stored key names
+alice list                       # default namespace
+alice list -ns kaka              # short names in kaka, e.g. eth
+alice list -a                    # all keys, e.g. eth and kaka.eth
 alice list -l                    # long: KEY / LENGTH / STRENGTH / MK(master-key ver) / DESC columns
 alice list 'kfk-*'               # filter names by a shell glob
 alice get stripe-key             # metadata only
@@ -454,7 +464,7 @@ program through its environment. `write` and `template` restore them into files.
 | `alice read <file>` | Print the file with secrets redacted |
 | `alice write <file> [--content C] [--quiet]` | Restore `<agent-vault:…>` placeholders (stdin if no `--content`) |
 | `alice has <keys...> [--json]` | Check existence (local metadata) |
-| `alice list [-l] [--json] [glob]` | List stored key names. `-l` adds length/strength/master-key-version columns; a glob filters names. |
+| `alice list [-ns NAME or -a] [-l] [--json] [glob]` | List stored key names. `-l` adds length/strength/master-key-version columns; a glob filters names. |
 | `alice status` | Enrollment + Bob reachability/unlock state |
 | `alice scan <file> [--json]` | Audit a file for vaulted + unvaulted secrets (redacted output — line numbers + key names, no values) |
 | `alice get <key> [--json]` | Secret **metadata** (no value); `--json` for scripts. The value needs `--reveal` — TTY only, see below. |

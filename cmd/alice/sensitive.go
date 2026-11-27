@@ -18,6 +18,7 @@ import (
 
 	"github.com/kaka-milan-22/AnB/v3/internal/ca"
 	"github.com/kaka-milan-22/AnB/v3/internal/crypto"
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 	"github.com/kaka-milan-22/AnB/v3/internal/localvault"
 	"github.com/kaka-milan-22/AnB/v3/internal/pwgen"
 	"github.com/kaka-milan-22/AnB/v3/internal/redact"
@@ -44,7 +45,7 @@ func cmdSet(args []string) error {
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: alice set <key> [flags]")
 	}
-	key := pos[0]
+	key := keyname.Canonical(pos[0])
 	descProvided := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "desc" {
@@ -63,8 +64,8 @@ func cmdSet(args []string) error {
 	if !term.StdinIsTTY() && !*stdin && !*generate && *fromEnv == "" {
 		return fmt.Errorf("non-interactive: provide a value via --from-env, --stdin, or --generate")
 	}
-	if !keyFormat.MatchString(key) {
-		return fmt.Errorf("invalid key format (use lowercase alphanumeric + hyphens, e.g. my-api-key)")
+	if !keyname.Valid(pos[0]) {
+		return fmt.Errorf("invalid key format (use key or namespace.key, e.g. kaka.eth)")
 	}
 	if *generate && (*fromEnv != "" || *stdin) {
 		return fmt.Errorf("--generate cannot be combined with --from-env or --stdin")
@@ -224,7 +225,7 @@ func cmdGet(args []string) error {
 	if *reveal && *asJSON {
 		return fmt.Errorf("--reveal and --json are mutually exclusive (--json is metadata only)")
 	}
-	key := pos[0]
+	key := keyname.Canonical(pos[0])
 	s := localvault.Open(*dir)
 	v, err := s.Load()
 	if err != nil {
@@ -325,6 +326,7 @@ func cmdRm(args []string) error {
 	// (e.g. 'test-*') matched against the stored names. Results are deduped.
 	matched := map[string]struct{}{}
 	for _, pat := range pos {
+		pat = keyname.Canonical(pat)
 		if v.Has(pat) {
 			matched[pat] = struct{}{}
 			continue
@@ -377,7 +379,7 @@ func cmdDesc(args []string) error {
 	if len(pos) == 0 {
 		return fmt.Errorf("usage: alice desc <key> [text...] | alice desc <key> --clear")
 	}
-	key := pos[0]
+	key := keyname.Canonical(pos[0])
 	s := localvault.Open(*dir)
 	v, err := s.Load()
 	if err != nil {
@@ -417,9 +419,10 @@ func cmdDesc(args []string) error {
 // A pattern with no wildcards matches only its exact literal.
 func matchKeys(v *localvault.Vault, pattern string) []string {
 	var out []string
-	for _, l := range v.List() {
-		if ok, err := filepath.Match(pattern, l.Key); err == nil && ok {
-			out = append(out, l.Key)
+	ns, glob := keyname.Split(pattern)
+	for _, l := range v.ListNamespace(ns) {
+		if ok, err := filepath.Match(glob, l.Key); err == nil && ok {
+			out = append(out, keyname.Canonical(ns+"."+l.Key))
 		}
 	}
 	return out

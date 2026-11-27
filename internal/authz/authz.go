@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/kaka-milan-22/AnB/v3/internal/keyname"
 )
 
 // DefaultRateLimit is the built-in per-minute decrypt cap used when the
@@ -83,8 +85,13 @@ func (p *Policy) Allowed(identity, key string) bool {
 	if !ok {
 		return false
 	}
+	namespace, short := keyname.Split(key)
 	for _, pre := range prefixes {
-		if pre == "*" || strings.HasPrefix(key, pre) {
+		if pre == "*" {
+			return true
+		}
+		ns, prefix := keyname.Split(pre)
+		if namespace == ns && strings.HasPrefix(short, prefix) {
 			return true
 		}
 	}
